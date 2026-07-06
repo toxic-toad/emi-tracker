@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import { Loan, EMI } from '../types';
+import { Loan, EMI, PaymentHistory } from '../types';
 import { db, isFirebaseConfigured } from '../lib/firebase';
 import {
   collection,
@@ -21,6 +21,7 @@ import { useAuth } from './AuthContext';
 interface LoanContextType {
   loans: Loan[];
   emis: EMI[];
+  paymentHistory: PaymentHistory[];
   loading: boolean;
   error: string | null;
   addLoan: (loan: Omit<Loan, 'id' | 'userId' | 'createdAt' | 'updatedAt'>) => Promise<void>;
@@ -38,7 +39,8 @@ const LoanContext = createContext<LoanContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
   LOANS: 'emi_tracker_loans',
-  EMIS: 'emi_tracker_emis'
+  EMIS: 'emi_tracker_emis',
+  PAYMENT_HISTORY: 'emi_tracker_payment_history'
 };
 
 function getLocalData<T>(key: string): T[] {
@@ -62,6 +64,7 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [loans, setLoans] = useState<Loan[]>([]);
   const [emis, setEmis] = useState<EMI[]>([]);
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const unsubscribers = useRef<(() => void)[]>([]);
@@ -148,8 +151,10 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
 
     const storedLoans = getLocalData<Loan>(STORAGE_KEYS.LOANS);
     const storedEmis = getLocalData<EMI>(STORAGE_KEYS.EMIS);
+    const storedPaymentHistory = getLocalData<PaymentHistory>(STORAGE_KEYS.PAYMENT_HISTORY);
     setLoans(storedLoans);
     setEmis(storedEmis);
+    setPaymentHistory(storedPaymentHistory);
     setLoading(false);
   }, [userId]);
 
@@ -316,6 +321,7 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
     }
 
     const now = new Date().toISOString();
+    const paidEMI = emis.find(e => e.id === emiId);
 
     if (isFirebaseConfigured() && userId !== 'local') {
       try {
@@ -346,23 +352,49 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
         toast.error(err.message || 'Failed to mark EMI as paid');
       }
     } else {
+      const needsNextEMI = paidEMI && loan.currentOutstanding > 0 &&
+        !emis.some(e => e.loanId === loanId && e.status === 'Pending' && e.id !== emiId);
+
+      const nextDueDate = needsNextEMI ? new Date(paidEMI!.dueDate) : null;
+      if (nextDueDate) nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+
       setEmis(prev => {
-        const updated = prev.map(e =>
+        let updated = prev.map(e =>
           e.id === emiId
             ? { ...e, status: 'Paid' as const, paymentDate: now, updatedAt: now, lateFee: 0 }
             : e
         );
+
+        if (needsNextEMI && nextDueDate) {
+          const monthDate = new Date(nextDueDate);
+          monthDate.setDate(1);
+          updated = [...updated, {
+            id: generateId(),
+            loanId,
+            userId,
+            month: monthDate.toISOString(),
+            amount: loan.emiAmount,
+            dueDate: nextDueDate.toISOString(),
+            status: 'Pending' as const,
+            lateFee: 0,
+            notes: '',
+            createdAt: now,
+            updatedAt: now
+          }];
+        }
+
         setLocalData(STORAGE_KEYS.EMIS, updated);
         return updated;
       });
 
       setLoans(prev => {
+        const newOutstanding = Math.max(0, loan.currentOutstanding - loan.emiAmount);
         const updated = prev.map(l =>
           l.id === loanId
             ? {
                 ...l,
                 emisRemaining: Math.max(0, l.emisRemaining - 1),
-                currentOutstanding: Math.max(0, l.currentOutstanding - l.emiAmount),
+                currentOutstanding: newOutstanding,
                 updatedAt: now
               }
             : l
@@ -371,9 +403,24 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
         return updated;
       });
 
+      setPaymentHistory(prev => {
+        const record: PaymentHistory = {
+          id: generateId(),
+          loanId,
+          userId,
+          emiId,
+          amount: loan.emiAmount,
+          paymentDate: now,
+          createdAt: now
+        };
+        const updated = [record, ...prev];
+        setLocalData(STORAGE_KEYS.PAYMENT_HISTORY, updated);
+        return updated;
+      });
+
       toast.success('EMI marked as paid');
     }
-  }, [loans, userId]);
+  }, [loans, emis, userId]);
 
   const updateEMI = useCallback(async (emiId: string, data: Partial<EMI>) => {
     if (isFirebaseConfigured() && userId !== 'local') {
@@ -430,14 +477,16 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
     }
     const storedLoans = getLocalData<Loan>(STORAGE_KEYS.LOANS);
     const storedEmis = getLocalData<EMI>(STORAGE_KEYS.EMIS);
+    const storedPaymentHistory = getLocalData<PaymentHistory>(STORAGE_KEYS.PAYMENT_HISTORY);
     setLoans(storedLoans);
     setEmis(storedEmis);
+    setPaymentHistory(storedPaymentHistory);
     setLoading(false);
   }, [userId]);
 
   return (
     <LoanContext.Provider value={{
-      loans, emis, loading, error,
+      loans, emis, paymentHistory, loading, error,
       addLoan, updateLoan, deleteLoan, duplicateLoan, archiveLoan,
       markEMIPaid, updateEMI, deleteEMI, refreshData
     }}>

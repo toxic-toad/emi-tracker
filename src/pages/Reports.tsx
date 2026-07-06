@@ -13,12 +13,14 @@ export function Reports() {
 
   const stats = useMemo(() => {
     const totalOutstanding = activeLoans.reduce((s, l) => s + l.currentOutstanding, 0);
-    const totalOriginal = activeLoans.reduce((s, l) => s + l.originalLoanAmount, 0);
-    const totalPaid = totalOriginal - totalOutstanding;
+    const totalPaid = activeLoans.reduce((s, l) => {
+      const loanEmis = emis.filter(e => e.loanId === l.id && e.status === 'Paid');
+      return s + loanEmis.reduce((sum, e) => sum + e.amount, 0);
+    }, 0);
     const totalEmisCount = emis.length;
     const paidEmisCount = emis.filter(e => e.status === 'Paid').length;
-    const completionRate = totalOriginal > 0 ? (totalPaid / totalOriginal) * 100 : 0;
-    return { totalOutstanding, totalOriginal, totalPaid, totalEmisCount, paidEmisCount, completionRate };
+    const completionRate = totalEmisCount > 0 ? (paidEmisCount / totalEmisCount) * 100 : 0;
+    return { totalOutstanding, totalPaid, totalEmisCount, paidEmisCount, completionRate };
   }, [activeLoans, emis]);
 
   if (loading) {
@@ -110,8 +112,8 @@ export function Reports() {
             />
           </div>
           <div className="flex justify-between mt-1 text-xs text-slate-500">
-            <span>Paid: {formatCurrency(stats.totalPaid)}</span>
-            <span>Remaining: {formatCurrency(stats.totalOutstanding)}</span>
+            <span>{stats.paidEmisCount} / {stats.totalEmisCount} EMIs Paid</span>
+            <span>{stats.totalEmisCount - stats.paidEmisCount} remaining</span>
           </div>
         </CardContent>
       </Card>
@@ -122,9 +124,6 @@ export function Reports() {
           const completion = calculateCompletionPercentage(loan);
           const loanEmis = emis.filter(e => e.loanId === loan.id);
           const paidEmis = loanEmis.filter(e => e.status === 'Paid').length;
-          const totalPaidAmount = loanEmis
-            .filter(e => e.status === 'Paid')
-            .reduce((s, e) => s + e.amount, 0);
           const nextPending = loanEmis.find(e => e.status === 'Pending');
           const remainingAmount = loan.currentOutstanding;
 
@@ -165,16 +164,16 @@ export function Reports() {
 
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-500">Paid</span>
-                      <p className="font-semibold text-green-400">{formatCurrency(totalPaidAmount)}</p>
-                    </div>
-                    <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-500">Remaining</span>
+                      <span className="text-slate-500">Outstanding</span>
                       <p className="font-semibold text-white">{formatCurrency(remainingAmount)}</p>
                     </div>
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                      <span className="text-slate-500">EMIs</span>
-                      <p className="font-semibold text-white">{paidEmis}/{loanEmis.length}</p>
+                      <span className="text-slate-500">Monthly EMI</span>
+                      <p className="font-semibold text-white">{formatCurrency(loan.emiAmount)}</p>
+                    </div>
+                    <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
+                      <span className="text-slate-500">EMIs Paid</span>
+                      <p className="font-semibold text-green-400">{paidEmis}/{loanEmis.length}</p>
                     </div>
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
                       <span className="text-slate-500">Next EMI</span>
@@ -184,6 +183,10 @@ export function Reports() {
                     </div>
                   </div>
 
+                  <div className="flex justify-between text-xs text-slate-400">
+                    <span>{paidEmis} / {loanEmis.length} EMIs Paid</span>
+                    <span>{completion.toFixed(0)}%</span>
+                  </div>
                   <div className="w-full bg-slate-700 rounded-full h-2">
                     <motion.div
                       initial={{ width: 0 }}

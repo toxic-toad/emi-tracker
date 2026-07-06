@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, CreditCard } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CreditCard, CheckCircle } from 'lucide-react';
 import { useLoans } from '../contexts/LoanContext';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -10,9 +10,16 @@ import { formatCurrency, formatDate, getDaysUntil } from '../utils/formatters';
 import { EMI, PaymentStatus } from '../types';
 
 export function Calendar() {
-  const { loans, emis, loading } = useLoans();
+  const { loans, emis, markEMIPaid, loading } = useLoans();
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedEMI, setSelectedEMI] = useState<EMI | null>(null);
+  const [selectedEmiId, setSelectedEmiId] = useState<string | null>(null);
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+
+  const liveSelectedEMI = useMemo(() => {
+    if (!selectedEmiId) return null;
+    return emis.find(e => e.id === selectedEmiId) || null;
+  }, [selectedEmiId, emis]);
 
   if (loading) {
     return (
@@ -41,8 +48,8 @@ export function Calendar() {
   const getEMIForDate = (day: number): EMI | null => {
     return emis.find(emi => {
       const emiDate = new Date(emi.dueDate);
-      return emiDate.getDate() === day && 
-             emiDate.getMonth() === month && 
+      return emiDate.getDate() === day &&
+             emiDate.getMonth() === month &&
              emiDate.getFullYear() === year;
     }) || null;
   };
@@ -59,13 +66,21 @@ export function Calendar() {
 
   const isToday = (day: number): boolean => {
     const today = new Date();
-    return day === today.getDate() && 
-           month === today.getMonth() && 
+    return day === today.getDate() &&
+           month === today.getMonth() &&
            year === today.getFullYear();
   };
 
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
                      'July', 'August', 'September', 'October', 'November', 'December'];
+
+  const handleConfirmPayment = async () => {
+    if (!liveSelectedEMI) return;
+    await markEMIPaid(liveSelectedEMI.id, liveSelectedEMI.loanId);
+    setConfirmingPayment(false);
+    setPaymentSuccess(true);
+    setTimeout(() => setPaymentSuccess(false), 2000);
+  };
 
   return (
     <div className="p-4 pb-24 space-y-4">
@@ -106,11 +121,11 @@ export function Calendar() {
                 const today = isToday(day);
 
                 return (
-                  <motion.button
-                    key={day}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => emi && setSelectedEMI(emi)}
-                    className={cn(
+                    <motion.button
+                      key={day}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => { emi && setSelectedEmiId(emi.id); setPaymentSuccess(false); }}
+                      className={cn(
                       'aspect-square rounded-lg flex flex-col items-center justify-center relative text-xs',
                       'border border-slate-700/50 bg-slate-800/30',
                       today && 'ring-2 ring-blue-500',
@@ -150,15 +165,31 @@ export function Calendar() {
 
       {/* EMI Detail Modal */}
       <Modal
-        isOpen={!!selectedEMI}
-        onClose={() => setSelectedEMI(null)}
+        isOpen={!!selectedEmiId}
+        onClose={() => { setSelectedEmiId(null); setConfirmingPayment(false); setPaymentSuccess(false); }}
         title="EMI Details"
       >
-        {selectedEMI && (() => {
-          const loan = loans.find(l => l.id === selectedEMI.loanId);
-          const daysUntil = getDaysUntil(selectedEMI.dueDate);
+        {liveSelectedEMI && (() => {
+          const loan = loans.find(l => l.id === liveSelectedEMI.loanId);
+          const daysUntil = getDaysUntil(liveSelectedEMI.dueDate);
+          const loanEmis = emis.filter(e => e.loanId === liveSelectedEMI.loanId);
+          const paidCount = loanEmis.filter(e => e.status === 'Paid').length;
+          const totalCount = loanEmis.length;
+          const isPaid = liveSelectedEMI.status === 'Paid';
+
           return (
             <div className="space-y-4">
+              {paymentSuccess && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="flex items-center gap-2 p-3 bg-green-900/30 border border-green-500/30 rounded-xl"
+                >
+                  <CheckCircle size={20} className="text-green-400" />
+                  <span className="text-green-400 font-medium">Payment recorded successfully!</span>
+                </motion.div>
+              )}
+
               <div className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                 <CreditCard size={20} className="text-slate-400" />
                 <div>
@@ -166,49 +197,118 @@ export function Calendar() {
                   <p className="text-sm text-slate-400">{loan?.lenderName}</p>
                 </div>
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                  <p className="text-xs text-slate-400 mb-1">Amount</p>
-                  <p className="text-lg font-bold text-white">{formatCurrency(selectedEMI.amount)}</p>
+                  <p className="text-xs text-slate-400 mb-1">EMI Amount</p>
+                  <p className="text-lg font-bold text-white">{formatCurrency(liveSelectedEMI.amount)}</p>
                 </div>
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                  <p className="text-xs text-slate-400 mb-1">Status</p>
+                  <p className="text-xs text-slate-400 mb-1">Current Status</p>
                   <span className={cn(
                     'px-2 py-1 rounded-full text-xs font-medium inline-block mt-1',
-                    selectedEMI.status === 'Paid' && 'bg-green-500/20 text-green-400',
-                    selectedEMI.status === 'Pending' && 'bg-yellow-500/20 text-yellow-400',
-                    selectedEMI.status === 'Overdue' && 'bg-red-500/20 text-red-400',
-                    selectedEMI.status === 'Skipped' && 'bg-slate-500/20 text-slate-400'
+                    isPaid && 'bg-green-500/20 text-green-400',
+                    liveSelectedEMI.status === 'Pending' && 'bg-yellow-500/20 text-yellow-400',
+                    liveSelectedEMI.status === 'Overdue' && 'bg-red-500/20 text-red-400',
+                    liveSelectedEMI.status === 'Skipped' && 'bg-slate-500/20 text-slate-400'
                   )}>
-                    {selectedEMI.status}
+                    {isPaid ? '✓ Paid' : liveSelectedEMI.status}
                   </span>
                 </div>
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                   <p className="text-xs text-slate-400 mb-1">Due Date</p>
-                  <p className="text-sm font-semibold text-white">{formatDate(selectedEMI.dueDate)}</p>
+                  <p className="text-sm font-semibold text-white">{formatDate(liveSelectedEMI.dueDate)}</p>
+                  {!isPaid && daysUntil >= 0 && (
+                    <p className="text-xs text-slate-500 mt-1">
+                      {daysUntil === 0 ? 'Today' : `${daysUntil} day${daysUntil !== 1 ? 's' : ''} left`}
+                    </p>
+                  )}
                 </div>
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                  <p className="text-xs text-slate-400 mb-1">Days Left</p>
-                  <p className="text-sm font-semibold text-white">
-                    {selectedEMI.status === 'Pending' && daysUntil >= 0 ? `${daysUntil} days` : '—'}
+                  <p className="text-xs text-slate-400 mb-1">Payment Date</p>
+                  <p className={cn('text-sm font-semibold', isPaid ? 'text-green-400' : 'text-slate-500')}>
+                    {liveSelectedEMI.paymentDate ? formatDate(liveSelectedEMI.paymentDate) : '—'}
                   </p>
                 </div>
               </div>
-              {selectedEMI.paymentDate && (
+
+              <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                  <p className="text-xs text-slate-400 mb-1">Payment Date</p>
-                  <p className="text-sm font-semibold text-green-400">{formatDate(selectedEMI.paymentDate)}</p>
+                  <p className="text-xs text-slate-400 mb-1">Remaining EMIs</p>
+                  <p className="text-lg font-bold text-white">{loan?.emisRemaining ?? '—'}</p>
+                </div>
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Outstanding Balance</p>
+                  <p className="text-lg font-bold text-white">
+                    {loan ? formatCurrency(loan.currentOutstanding) : '—'}
+                  </p>
+                </div>
+              </div>
+
+              {loan && (
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Progress</p>
+                  <p className="text-sm text-slate-300">{paidCount} / {totalCount} EMIs Paid</p>
+                  <div className="w-full bg-slate-700 rounded-full h-1.5 mt-2">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${totalCount > 0 ? (paidCount / totalCount) * 100 : 0}%` }}
+                      className="h-full rounded-full bg-gradient-to-r from-blue-500 to-purple-500"
+                    />
+                  </div>
                 </div>
               )}
-              {selectedEMI.notes && (
+
+              {liveSelectedEMI.notes && (
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                   <p className="text-xs text-slate-400 mb-1">Notes</p>
-                  <p className="text-sm text-white">{selectedEMI.notes}</p>
+                  <p className="text-sm text-white">{liveSelectedEMI.notes}</p>
                 </div>
               )}
+
+              <div className="flex gap-3 pt-2">
+                <Button variant="secondary" onClick={() => { setSelectedEmiId(null); setConfirmingPayment(false); setPaymentSuccess(false); }} className="flex-1">
+                  Cancel
+                </Button>
+                {isPaid ? (
+                  <Button variant="secondary" disabled className="flex-1" icon={<CheckCircle size={16} />}>
+                    ✓ EMI Already Paid
+                  </Button>
+                ) : (
+                  <Button onClick={() => setConfirmingPayment(true)} className="flex-1" icon={<CheckCircle size={16} />}>
+                    Mark EMI as Paid
+                  </Button>
+                )}
+              </div>
             </div>
           );
         })()}
+      </Modal>
+
+      {/* Payment Confirmation Modal */}
+      <Modal
+        isOpen={confirmingPayment}
+        onClose={() => setConfirmingPayment(false)}
+        title="Confirm Payment"
+      >
+        <div className="space-y-4">
+          <p className="text-slate-300 text-center text-lg">
+            Have you successfully paid this EMI?
+          </p>
+          <p className="text-slate-400 text-center text-sm">
+            {liveSelectedEMI && (
+              <>{formatCurrency(liveSelectedEMI.amount)} for {loans.find(l => l.id === liveSelectedEMI.loanId)?.loanName}</>
+            )}
+          </p>
+          <div className="flex gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setConfirmingPayment(false)} className="flex-1">
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmPayment} className="flex-1">
+              Yes, Mark Paid
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

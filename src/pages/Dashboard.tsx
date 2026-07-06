@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   TrendingUp, TrendingDown, Calendar, AlertCircle, CheckCircle,
@@ -8,7 +8,6 @@ import {
 import { useLoans } from '../contexts/LoanContext';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
 import { formatCurrency, formatPercentage, formatDate, getDaysUntil, formatRelativeDate } from '../utils/formatters';
 import {
   generateDashboardSummary,
@@ -22,8 +21,7 @@ import { PieChart as RechartsPieChart, Pie, Cell, ResponsiveContainer as PieResp
 const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f97316', '#6366f1'];
 
 export function Dashboard() {
-  const { loans, emis, markEMIPaid, loading } = useLoans();
-  const [payingEMI, setPayingEMI] = useState<string | null>(null);
+  const { loans, emis, loading } = useLoans();
 
   const activeLoans = useMemo(() => loans.filter(l => l.status === 'active' || !l.status), [loans]);
   const summary = useMemo(() => generateDashboardSummary(activeLoans, emis), [activeLoans, emis]);
@@ -31,25 +29,19 @@ export function Dashboard() {
   const health = useMemo(() => calculateFinancialHealth(activeLoans, emis), [activeLoans, emis]);
   const monthlySavings = useMemo(() => calculateMonthlySavings(loans), [loans]);
 
-  const nextEMI = useMemo(() => {
+  const nextEMIPaid = useMemo(() => {
     if (!summary.nextEMIDate) return null;
     return emis.find(e => {
       const loan = loans.find(l => l.loanName === summary.nextEMILoanName);
       if (!loan) return false;
       const d = new Date(e.dueDate);
       const nd = new Date(summary.nextEMIDate!);
-      return e.loanId === loan.id && e.status === 'Pending' &&
+      return e.loanId === loan.id &&
         d.getFullYear() === nd.getFullYear() &&
         d.getMonth() === nd.getMonth() &&
         d.getDate() === nd.getDate();
     }) || null;
   }, [emis, loans, summary]);
-
-  const handleMarkPaid = async () => {
-    if (!payingEMI || !nextEMI) return;
-    await markEMIPaid(payingEMI, nextEMI.loanId);
-    setPayingEMI(null);
-  };
 
   const upcomingEMIs = useMemo(() => {
     const today = new Date();
@@ -173,16 +165,15 @@ export function Dashboard() {
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-semibold text-blue-400">{formatDate(summary.nextEMIDate)}</p>
-                  <p className="text-xs text-slate-500 mb-2">{getDaysUntil(summary.nextEMIDate)} days</p>
-                  {nextEMI && (
-                    <Button
-                      size="sm"
-                      icon={<CheckCircle size={14} />}
-                      onClick={() => setPayingEMI(nextEMI.id)}
-                    >
-                      Mark Paid
-                    </Button>
-                  )}
+                  <p className="text-xs text-slate-500">{getDaysUntil(summary.nextEMIDate)} days</p>
+                  <span className={cn(
+                    'text-xs px-2 py-0.5 rounded-full mt-1 inline-block',
+                    nextEMIPaid?.status === 'Paid'
+                      ? 'bg-green-500/20 text-green-400'
+                      : 'bg-yellow-500/20 text-yellow-400'
+                  )}>
+                    {nextEMIPaid?.status === 'Paid' ? '✓ Paid' : 'Pending'}
+                  </span>
                 </div>
               </CardContent>
             </Card>
@@ -594,23 +585,6 @@ export function Dashboard() {
         )}
       </motion.div>
 
-      {/* Mark Paid Confirmation */}
-      <Modal
-        isOpen={!!payingEMI}
-        onClose={() => setPayingEMI(null)}
-        title="Confirm Payment"
-      >
-        <div className="space-y-4">
-          <p className="text-slate-300">
-            Mark <span className="text-white font-semibold">{formatCurrency(summary.nextEMIAmount)}</span> for{' '}
-            <span className="text-white font-semibold">{summary.nextEMILoanName}</span> as paid?
-          </p>
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => setPayingEMI(null)} className="flex-1">Cancel</Button>
-            <Button onClick={handleMarkPaid} className="flex-1">Confirm Payment</Button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }

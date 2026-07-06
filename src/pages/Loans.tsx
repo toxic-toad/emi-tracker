@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Search, Edit, Trash2, CheckCircle } from 'lucide-react';
+import { Plus, Search, Edit, Trash2 } from 'lucide-react';
 import { useLoans } from '../contexts/LoanContext';
 import { Loan, LoanType } from '../types';
 import { Card, CardContent } from '../components/ui/Card';
@@ -60,7 +60,7 @@ const FILTER_OPTIONS = [
 ];
 
 export function Loans() {
-  const { loans, emis, addLoan, updateLoan, deleteLoan, markEMIPaid, loading } = useLoans();
+  const { loans, emis, addLoan, updateLoan, deleteLoan, loading } = useLoans();
   const [showModal, setShowModal] = useState(false);
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -203,16 +203,6 @@ export function Loans() {
     setShowDeleteConfirm(null);
   };
 
-  const handleMarkPaid = async (loanId: string) => {
-    const pending = emis.find(e => e.loanId === loanId && e.status === 'Pending');
-    if (pending) {
-      await markEMIPaid(pending.id, loanId);
-      toast.success('EMI marked as paid');
-    } else {
-      toast.error('No pending EMI found');
-    }
-  };
-
   const handleCloseModal = () => {
     setShowModal(false);
     setEditingLoan(null);
@@ -315,7 +305,7 @@ export function Loans() {
                             <span className="font-semibold text-white">{formatCurrency(loan.currentOutstanding)}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-slate-500">EMI</span>
+                            <span className="text-slate-500">Monthly EMI</span>
                             <span className="font-semibold text-white">{formatCurrency(loan.emiAmount)}</span>
                           </div>
                           <div className="flex justify-between">
@@ -334,6 +324,10 @@ export function Loans() {
                       </div>
                     </div>
 
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>{(loan.totalEmis - loan.emisRemaining)} / {loan.totalEmis} EMIs Paid</span>
+                      <span>{completion.toFixed(0)}%</span>
+                    </div>
                     <div className="w-full bg-slate-700 rounded-full h-2">
                       <motion.div
                         initial={{ width: 0 }}
@@ -343,15 +337,6 @@ export function Loans() {
                     </div>
 
                     <div className="flex gap-2 pt-1">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        icon={<CheckCircle size={14} />}
-                        onClick={() => handleMarkPaid(loan.id)}
-                        className="flex-1 text-xs"
-                      >
-                        Mark Paid
-                      </Button>
                       <Button
                         size="sm"
                         variant="secondary"

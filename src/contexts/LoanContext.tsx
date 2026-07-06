@@ -321,7 +321,6 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
     }
 
     const now = new Date().toISOString();
-    const paidEMI = emis.find(e => e.id === emiId);
 
     if (isFirebaseConfigured() && userId !== 'local') {
       try {
@@ -340,11 +339,16 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
           }
         });
 
-        batch.update(doc(db!, 'loans', loanId), {
-          emisRemaining: Math.max(0, loan.emisRemaining - 1),
+        const newRemaining = loan.emisRemaining - 1;
+        const loanUpdate: Record<string, any> = {
+          emisRemaining: Math.max(0, newRemaining),
           currentOutstanding: Math.max(0, loan.currentOutstanding - loan.emiAmount),
           updatedAt: serverTimestamp()
-        });
+        };
+        if (newRemaining <= 0) {
+          loanUpdate.status = 'completed';
+        }
+        batch.update(doc(db!, 'loans', loanId), loanUpdate);
 
         await batch.commit();
         toast.success('EMI marked as paid');
@@ -352,37 +356,14 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
         toast.error(err.message || 'Failed to mark EMI as paid');
       }
     } else {
-      const needsNextEMI = paidEMI && loan.currentOutstanding > 0 &&
-        !emis.some(e => e.loanId === loanId && e.status === 'Pending' && e.id !== emiId);
-
-      const nextDueDate = needsNextEMI ? new Date(paidEMI!.dueDate) : null;
-      if (nextDueDate) nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+      const newRemaining = loan.emisRemaining - 1;
 
       setEmis(prev => {
-        let updated = prev.map(e =>
+        const updated = prev.map(e =>
           e.id === emiId
             ? { ...e, status: 'Paid' as const, paymentDate: now, updatedAt: now, lateFee: 0 }
             : e
         );
-
-        if (needsNextEMI && nextDueDate) {
-          const monthDate = new Date(nextDueDate);
-          monthDate.setDate(1);
-          updated = [...updated, {
-            id: generateId(),
-            loanId,
-            userId,
-            month: monthDate.toISOString(),
-            amount: loan.emiAmount,
-            dueDate: nextDueDate.toISOString(),
-            status: 'Pending' as const,
-            lateFee: 0,
-            notes: '',
-            createdAt: now,
-            updatedAt: now
-          }];
-        }
-
         setLocalData(STORAGE_KEYS.EMIS, updated);
         return updated;
       });
@@ -393,8 +374,9 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
           l.id === loanId
             ? {
                 ...l,
-                emisRemaining: Math.max(0, l.emisRemaining - 1),
+                emisRemaining: Math.max(0, newRemaining),
                 currentOutstanding: newOutstanding,
+                ...(newRemaining <= 0 ? { status: 'completed' as const } : {}),
                 updatedAt: now
               }
             : l

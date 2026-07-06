@@ -17,10 +17,10 @@ export function Reports() {
       const loanEmis = emis.filter(e => e.loanId === l.id && e.status === 'Paid');
       return s + loanEmis.reduce((sum, e) => sum + e.amount, 0);
     }, 0);
-    const totalEmisCount = emis.length;
-    const paidEmisCount = emis.filter(e => e.status === 'Paid').length;
-    const completionRate = totalEmisCount > 0 ? (paidEmisCount / totalEmisCount) * 100 : 0;
-    return { totalOutstanding, totalPaid, totalEmisCount, paidEmisCount, completionRate };
+    const totalAllEmis = activeLoans.reduce((s, l) => s + l.totalEmis, 0);
+    const totalPaidEmis = activeLoans.reduce((s, l) => s + (l.totalEmis - l.emisRemaining), 0);
+    const completionRate = totalAllEmis > 0 ? (totalPaidEmis / totalAllEmis) * 100 : 0;
+    return { totalOutstanding, totalPaid, totalAllEmis, totalPaidEmis, completionRate };
   }, [activeLoans, emis]);
 
   if (loading) {
@@ -81,7 +81,7 @@ export function Reports() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-xl font-bold text-white">{stats.paidEmisCount}/{stats.totalEmisCount}</p>
+            <p className="text-xl font-bold text-white">{stats.totalPaidEmis}/{stats.totalAllEmis}</p>
           </CardContent>
         </Card>
         <Card gradient>
@@ -112,8 +112,8 @@ export function Reports() {
             />
           </div>
           <div className="flex justify-between mt-1 text-xs text-slate-500">
-            <span>{stats.paidEmisCount} / {stats.totalEmisCount} EMIs Paid</span>
-            <span>{stats.totalEmisCount - stats.paidEmisCount} remaining</span>
+            <span>{stats.totalPaidEmis} / {stats.totalAllEmis} EMIs Paid</span>
+            <span>{stats.totalAllEmis - stats.totalPaidEmis} remaining</span>
           </div>
         </CardContent>
       </Card>
@@ -122,10 +122,7 @@ export function Reports() {
       <div className="space-y-3">
         {activeLoans.map((loan, index) => {
           const completion = calculateCompletionPercentage(loan);
-          const loanEmis = emis.filter(e => e.loanId === loan.id);
-          const paidEmis = loanEmis.filter(e => e.status === 'Paid').length;
-          const nextPending = loanEmis.find(e => e.status === 'Pending');
-          const remainingAmount = loan.currentOutstanding;
+          const paidEmis = loan.totalEmis - loan.emisRemaining;
 
           return (
             <motion.div
@@ -165,7 +162,7 @@ export function Reports() {
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
                       <span className="text-slate-500">Outstanding</span>
-                      <p className="font-semibold text-white">{formatCurrency(remainingAmount)}</p>
+                      <p className="font-semibold text-white">{formatCurrency(loan.currentOutstanding)}</p>
                     </div>
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
                       <span className="text-slate-500">Monthly EMI</span>
@@ -173,18 +170,18 @@ export function Reports() {
                     </div>
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
                       <span className="text-slate-500">EMIs Paid</span>
-                      <p className="font-semibold text-green-400">{paidEmis}/{loanEmis.length}</p>
+                      <p className="font-semibold text-green-400">{paidEmis}/{loan.totalEmis}</p>
                     </div>
                     <div className="p-2 bg-slate-800/50 rounded-lg border border-slate-700/50">
                       <span className="text-slate-500">Next EMI</span>
                       <p className="font-semibold text-blue-400">
-                        {nextPending ? formatDate(nextPending.dueDate) : '—'}
+                        {loan.nextEMIDate ? formatDate(loan.nextEMIDate) : '—'}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex justify-between text-xs text-slate-400">
-                    <span>{paidEmis} / {loanEmis.length} EMIs Paid</span>
+                    <span>{paidEmis} / {loan.totalEmis} EMIs Paid</span>
                     <span>{completion.toFixed(0)}%</span>
                   </div>
                   <div className="w-full bg-slate-700 rounded-full h-2">

@@ -1,4 +1,13 @@
 import { Loan, EMI, FinancialHealth, AIInsight, DashboardSummary } from '../types';
+import { addMonths } from 'date-fns';
+
+export function calculateNextEMI(loan: Loan): Date | null {
+  if (loan.emisRemaining <= 0) return null;
+  const paidCount = loan.totalEmis - loan.emisRemaining;
+  const date = addMonths(new Date(loan.loanStartDate), paidCount);
+  date.setDate(loan.dueDate);
+  return date;
+}
 
 export function calculateEMI(P: number, annualRate: number, n: number): number {
   if (annualRate === 0) return P / n;
@@ -74,40 +83,26 @@ export function calculateTotalMonthlyEMI(loans: Loan[]): number {
 }
 
 export function getNextEMIDate(loans: Loan[]): Date | null {
-  if (loans.length === 0) return null;
+  const active = loans.filter(l => l.emisRemaining > 0 && l.nextEMIDate);
+  if (active.length === 0) return null;
 
-  const today = new Date();
-  const upcomingDates = loans
-    .filter(l => l.emisRemaining > 0)
-    .map(loan => {
-      const nextDate = new Date();
-      nextDate.setDate(loan.dueDate);
-      if (nextDate <= today) {
-        nextDate.setMonth(nextDate.getMonth() + 1);
-      }
-      return { date: nextDate, loan };
-    })
-    .filter(({ date }) => date >= today)
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const dates = active
+    .map(l => new Date(l.nextEMIDate!))
+    .sort((a, b) => a.getTime() - b.getTime());
 
-  return upcomingDates[0]?.date || null;
+  return dates[0] || null;
 }
 
 export function getNextEMIDetails(loans: Loan[]): { date: Date | null; amount: number; loanName: string } {
-  if (loans.length === 0) return { date: null, amount: 0, loanName: '' };
+  const active = loans.filter(l => l.emisRemaining > 0 && l.nextEMIDate);
+  if (active.length === 0) return { date: null, amount: 0, loanName: '' };
 
-  const today = new Date();
-  const upcoming = loans
-    .filter(l => l.emisRemaining > 0)
-    .map(loan => {
-      const nextDate = new Date();
-      nextDate.setDate(loan.dueDate);
-      if (nextDate <= today) {
-        nextDate.setMonth(nextDate.getMonth() + 1);
-      }
-      return { date: nextDate, amount: loan.emiAmount, loanName: loan.loanName, loan };
-    })
-    .filter(({ date }) => date >= today)
+  const upcoming = active
+    .map(loan => ({
+      date: new Date(loan.nextEMIDate!),
+      amount: loan.emiAmount,
+      loanName: loan.loanName,
+    }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   return upcoming[0] || { date: null, amount: 0, loanName: '' };

@@ -30,26 +30,29 @@ export function Dashboard() {
   const monthlySavings = useMemo(() => calculateMonthlySavings(loans), [loans]);
 
   const nextEMIPaid = useMemo(() => {
-    if (!summary.nextEMIDate) return null;
-    return emis.find(e => {
-      const loan = loans.find(l => l.loanName === summary.nextEMILoanName);
-      if (!loan) return false;
-      const d = new Date(e.dueDate);
-      const nd = new Date(summary.nextEMIDate!);
-      return e.loanId === loan.id &&
-        d.getFullYear() === nd.getFullYear() &&
-        d.getMonth() === nd.getMonth() &&
-        d.getDate() === nd.getDate();
-    }) || null;
+    if (!summary.nextEMIDate || !summary.nextEMILoanName) return null;
+    const loan = loans.find(l => l.loanName === summary.nextEMILoanName);
+    if (!loan) return null;
+    const nd = new Date(summary.nextEMIDate);
+    return emis.find(e =>
+      e.loanId === loan.id &&
+      e.status === 'Paid' &&
+      new Date(e.dueDate).getFullYear() === nd.getFullYear() &&
+      new Date(e.dueDate).getMonth() === nd.getMonth()
+    ) || null;
   }, [emis, loans, summary]);
 
   const upcomingEMIs = useMemo(() => {
-    const today = new Date();
     return emis
-      .filter(e => e.status === 'Pending' && new Date(e.dueDate) >= today)
+      .filter(e => {
+        const loan = loans.find(l => l.id === e.loanId);
+        return loan && loan.nextEMIDate &&
+          new Date(e.dueDate).getFullYear() === new Date(loan.nextEMIDate).getFullYear() &&
+          new Date(e.dueDate).getMonth() === new Date(loan.nextEMIDate).getMonth();
+      })
       .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
       .slice(0, 5);
-  }, [emis]);
+  }, [emis, loans]);
 
   const recentPayments = useMemo(() => {
     return emis

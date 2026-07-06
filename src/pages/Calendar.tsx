@@ -60,13 +60,17 @@ export function Calendar() {
 
     if (emi.status === 'Paid') return { emi, displayStatus: 'paid' };
 
-    const paidCount = loan.totalEmis - loan.emisRemaining;
-    const startDate = new Date(loan.loanStartDate);
-    const emiDate = new Date(emi.dueDate);
-    const monthIndex = (emiDate.getFullYear() - startDate.getFullYear()) * 12 + (emiDate.getMonth() - startDate.getMonth());
+    if (!loan.nextEMIDate) return null;
 
-    if (monthIndex === paidCount) return { emi, displayStatus: 'pending' };
-    if (monthIndex < paidCount) return { emi, displayStatus: 'paid' };
+    const nextDate = new Date(loan.nextEMIDate);
+    const emiDate = new Date(emi.dueDate);
+
+    const isNextMonth = emiDate.getFullYear() === nextDate.getFullYear() &&
+      emiDate.getMonth() === nextDate.getMonth();
+
+    if (isNextMonth) return { emi, displayStatus: 'pending' };
+
+    if (emiDate < nextDate) return { emi, displayStatus: 'paid' };
 
     return null;
   };

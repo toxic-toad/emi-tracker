@@ -13,7 +13,7 @@ import {
   formatCurrency,
   formatDate
 } from '../utils/formatters';
-import { calculateCompletionPercentage } from '../utils/calculations';
+import { calculateCompletionPercentage, calculateNextEMI } from '../utils/calculations';
 import { toast } from 'react-hot-toast';
 
 const LOAN_TYPES: LoanType[] = ['Home', 'Personal', 'Credit Card', 'Vehicle', 'Education', 'Gold', 'BNPL', 'Other'];
@@ -24,7 +24,6 @@ interface LoanFormData {
   lenderName: string;
   loanType: LoanType;
   originalLoanAmount: string;
-  currentOutstanding: string;
   emiAmount: string;
   totalEmis: string;
   emisRemaining: string;
@@ -39,7 +38,6 @@ const emptyForm: LoanFormData = {
   lenderName: '',
   loanType: 'Personal',
   originalLoanAmount: '',
-  currentOutstanding: '',
   emiAmount: '',
   totalEmis: '',
   emisRemaining: '',
@@ -125,12 +123,13 @@ export function Loans() {
 
     if (!formData.loanName.trim()) errors.loanName = 'Loan name is required';
     if (!formData.lenderName.trim()) errors.lenderName = 'Lender name is required';
-    if (!formData.originalLoanAmount || parseFloat(formData.originalLoanAmount) <= 0) errors.originalLoanAmount = 'Must be > 0';
-    if (!formData.currentOutstanding || parseFloat(formData.currentOutstanding) < 0) errors.currentOutstanding = 'Cannot be negative';
-    if (!formData.emiAmount || parseFloat(formData.emiAmount) <= 0) errors.emiAmount = 'Must be > 0';
-    if (!formData.totalEmis || parseInt(formData.totalEmis) <= 0) errors.totalEmis = 'Must be > 0';
-    if (!formData.emisRemaining || parseInt(formData.emisRemaining) < 0) errors.emisRemaining = 'Cannot be negative';
+    if (!formData.originalLoanAmount || parseFloat(formData.originalLoanAmount) <= 0) errors.originalLoanAmount = 'Original loan amount must be greater than zero';
+    if (!formData.emiAmount || parseFloat(formData.emiAmount) <= 0) errors.emiAmount = 'EMI amount must be greater than zero';
+    if (!formData.totalEmis || parseInt(formData.totalEmis) <= 0) errors.totalEmis = 'Total EMIs must be greater than zero';
+    if (!formData.emisRemaining || parseInt(formData.emisRemaining) < 0) errors.emisRemaining = 'Remaining EMIs cannot be negative';
+    if (formData.emisRemaining && formData.totalEmis && parseInt(formData.emisRemaining) > parseInt(formData.totalEmis)) errors.emisRemaining = 'Remaining EMIs cannot exceed Total EMIs';
     if (!formData.loanStartDate) errors.loanStartDate = 'Start date is required';
+    if (formData.loanStartDate && formData.nextEMIDate && formData.nextEMIDate < formData.loanStartDate) errors.nextEMIDate = 'Next EMI date cannot be before Loan Start Date';
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -140,20 +139,25 @@ export function Loans() {
     e.preventDefault();
     if (!validate()) return;
 
+    const emiAmount = parseFloat(formData.emiAmount);
     const emiRemaining = parseInt(formData.emisRemaining);
-    const nextDate = formData.nextEMIDate || new Date().toISOString().split('T')[0];
+    const totalEmis = parseInt(formData.totalEmis);
+    const outstanding = emiAmount * emiRemaining;
+    const computedLoan = { loanStartDate: formData.loanStartDate, totalEmis, emisRemaining: emiRemaining, dueDate: 1 } as Loan;
+    const defaultNext = calculateNextEMI(computedLoan);
+    const nextDate = formData.nextEMIDate || (defaultNext ? defaultNext.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
 
     const loanData = {
       loanName: formData.loanName.trim(),
       lenderName: formData.lenderName.trim(),
       loanType: formData.loanType,
       originalLoanAmount: parseFloat(formData.originalLoanAmount),
-      currentOutstanding: parseFloat(formData.currentOutstanding),
-      emiAmount: parseFloat(formData.emiAmount),
+      currentOutstanding: outstanding,
+      emiAmount: emiAmount,
       interestRate: 0,
       processingFee: 0,
       emisRemaining: emiRemaining,
-      totalEmis: parseInt(formData.totalEmis),
+      totalEmis: totalEmis,
       dueDate: 1,
       nextEMIDate: nextDate,
       loanStartDate: formData.loanStartDate,
@@ -186,7 +190,6 @@ export function Loans() {
       lenderName: loan.lenderName,
       loanType: loan.loanType,
       originalLoanAmount: loan.originalLoanAmount.toString(),
-      currentOutstanding: loan.currentOutstanding.toString(),
       emiAmount: loan.emiAmount.toString(),
       totalEmis: loan.totalEmis.toString(),
       emisRemaining: loan.emisRemaining.toString(),
@@ -299,25 +302,23 @@ export function Loans() {
                           )}
                         </div>
                         <p className="text-sm text-slate-400">{loan.lenderName} · {loan.loanType}</p>
-                        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Outstanding</span>
-                            <span className="font-semibold text-white">{formatCurrency(loan.currentOutstanding)}</span>
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-x-4 sm:gap-y-1 text-sm">
+                          <div className="sm:flex sm:justify-between">
+                            <span className="block text-slate-500 sm:inline">Outstanding</span>
+                            <span className="block font-semibold text-white sm:inline">{formatCurrency(loan.currentOutstanding)}</span>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Monthly EMI</span>
-                            <span className="font-semibold text-white">{formatCurrency(loan.emiAmount)}</span>
+                          <div className="sm:flex sm:justify-between">
+                            <span className="block text-slate-500 sm:inline">Monthly EMI</span>
+                            <span className="block font-semibold text-white sm:inline">{formatCurrency(loan.emiAmount)}</span>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Remaining</span>
-                            <span className="font-semibold text-white">{loan.emisRemaining}/{loan.totalEmis}</span>
+                          <div className="sm:flex sm:justify-between">
+                            <span className="block text-slate-500 sm:inline">Remaining EMIs</span>
+                            <span className="block font-semibold text-white sm:inline">{loan.emisRemaining}/{loan.totalEmis}</span>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Next EMI</span>
-                            <span className="font-semibold text-blue-400">
-                              {emis.find(e => e.loanId === loan.id && e.status === 'Pending')
-                                ? formatDate(emis.find(e => e.loanId === loan.id && e.status === 'Pending')!.dueDate)
-                                : '—'}
+                          <div className="sm:flex sm:justify-between">
+                            <span className="block text-slate-500 sm:inline">Next EMI</span>
+                            <span className="block font-semibold text-blue-400 sm:inline">
+                              {loan.nextEMIDate ? formatDate(loan.nextEMIDate) : '—'}
                             </span>
                           </div>
                         </div>
@@ -425,17 +426,14 @@ export function Loans() {
               placeholder="e.g. 5000000"
               required
             />
-            <Input
-              label="Outstanding Amount *"
-              type="number"
-              min="0"
-              step="0.01"
-              value={formData.currentOutstanding}
-              onChange={(e) => setFormData({ ...formData, currentOutstanding: e.target.value })}
-              error={formErrors.currentOutstanding}
-              placeholder="e.g. 3500000"
-              required
-            />
+            <div className="p-3 bg-slate-800/30 border border-slate-700/50 rounded-xl flex flex-col justify-center">
+              <span className="text-xs text-slate-400 mb-0.5">Outstanding Amount (auto-calculated)</span>
+              <span className="text-lg font-bold text-white">
+                {formData.emiAmount && formData.emisRemaining
+                  ? formatCurrency(parseFloat(formData.emiAmount) * parseInt(formData.emisRemaining))
+                  : '—'}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

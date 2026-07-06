@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
 import { useAuth } from './AuthContext';
+import { addMonths } from 'date-fns';
 
 interface LoanContextType {
   loans: Loan[];
@@ -340,11 +341,17 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
         });
 
         const newRemaining = loan.emisRemaining - 1;
+        const nextDate = newRemaining > 0
+          ? Timestamp.fromDate(addMonths(new Date(loan.nextEMIDate || loan.loanStartDate), 1))
+          : null;
         const loanUpdate: Record<string, any> = {
           emisRemaining: Math.max(0, newRemaining),
           currentOutstanding: Math.max(0, loan.currentOutstanding - loan.emiAmount),
           updatedAt: serverTimestamp()
         };
+        if (nextDate) {
+          loanUpdate.nextEMIDate = nextDate;
+        }
         if (newRemaining <= 0) {
           loanUpdate.status = 'completed';
         }
@@ -370,12 +377,16 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
 
       setLoans(prev => {
         const newOutstanding = Math.max(0, loan.currentOutstanding - loan.emiAmount);
+        const nextDate = newRemaining > 0
+          ? addMonths(new Date(loan.nextEMIDate || loan.loanStartDate), 1).toISOString()
+          : undefined;
         const updated = prev.map(l =>
           l.id === loanId
             ? {
                 ...l,
                 emisRemaining: Math.max(0, newRemaining),
                 currentOutstanding: newOutstanding,
+                nextEMIDate: nextDate || l.nextEMIDate,
                 ...(newRemaining <= 0 ? { status: 'completed' as const } : {}),
                 updatedAt: now
               }

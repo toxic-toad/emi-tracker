@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -12,16 +12,20 @@ interface ModalProps {
 }
 
 export function Modal({ isOpen, onClose, title, children, className }: ModalProps) {
+  const handleEscape = useCallback((e: KeyboardEvent) => {
+    if (e.key === 'Escape') onClose();
+  }, [onClose]);
+
   useEffect(() => {
     if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
       document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
     }
     return () => {
-      document.body.style.overflow = 'unset';
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = '';
     };
-  }, [isOpen]);
+  }, [isOpen, handleEscape]);
 
   return (
     <AnimatePresence>
@@ -31,33 +35,38 @@ export function Modal({ isOpen, onClose, title, children, className }: ModalProp
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
             onClick={onClose}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
           />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className={cn(
-              'fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2',
-              'w-[90%] max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl z-50',
-              'max-h-[90vh] overflow-y-auto',
-              className
-            )}
-          >
-            <div className="sticky top-0 bg-slate-900 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
-              {title && <h2 className="text-xl font-semibold text-white">{title}</h2>}
-              <button
-                onClick={onClose}
-                className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6">
-              {children}
-            </div>
-          </motion.div>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                'w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl',
+                'max-h-[90vh] overflow-y-auto',
+                className
+              )}
+            >
+              <div className="sticky top-0 bg-slate-900 border-b border-slate-700 px-6 py-4 flex items-center justify-between rounded-t-2xl z-10">
+                {title && <h2 className="text-xl font-semibold text-white">{title}</h2>}
+                <button
+                  onClick={onClose}
+                  className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white ml-auto"
+                  aria-label="Close modal"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-6">
+                {children}
+              </div>
+            </motion.div>
+          </div>
         </>
       )}
     </AnimatePresence>

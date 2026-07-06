@@ -1,84 +1,182 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Search, Filter, MoreVertical, Edit, Trash2 } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { motion } from 'framer-motion';
+import { Plus, Search, Edit, Trash2, CheckCircle } from 'lucide-react';
 import { useLoans } from '../contexts/LoanContext';
 import { Loan, LoanType } from '../types';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
+import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { Input } from '../components/ui/Input';
-import { Select } from '../components/ui/Input';
-import { formatCurrency, formatDate } from '../utils/formatters';
-import { calculateCompletionPercentage } from '../utils/calculations';
+import { Input, Select } from '../components/ui/Input';
 import { ProgressRing } from '../components/ui/ProgressRing';
 import { cn } from '../utils/cn';
+import {
+  formatCurrency,
+  formatDate
+} from '../utils/formatters';
+import { calculateCompletionPercentage } from '../utils/calculations';
+import { toast } from 'react-hot-toast';
 
 const LOAN_TYPES: LoanType[] = ['Home', 'Personal', 'Credit Card', 'Vehicle', 'Education', 'Gold', 'BNPL', 'Other'];
 const LOAN_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f97316', '#6366f1'];
 
+interface LoanFormData {
+  loanName: string;
+  lenderName: string;
+  loanType: LoanType;
+  originalLoanAmount: string;
+  currentOutstanding: string;
+  emiAmount: string;
+  totalEmis: string;
+  emisRemaining: string;
+  loanStartDate: string;
+  nextEMIDate: string;
+  notes: string;
+  colorTag: string;
+}
+
+const emptyForm: LoanFormData = {
+  loanName: '',
+  lenderName: '',
+  loanType: 'Personal',
+  originalLoanAmount: '',
+  currentOutstanding: '',
+  emiAmount: '',
+  totalEmis: '',
+  emisRemaining: '',
+  loanStartDate: '',
+  nextEMIDate: '',
+  notes: '',
+  colorTag: '#3b82f6'
+};
+
+const FILTER_OPTIONS = [
+  { value: 'all', label: 'All Loans' },
+  { value: 'active', label: 'Active' },
+  { value: 'archived', label: 'Archived' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'due_week', label: 'Due This Week' },
+  { value: 'due_month', label: 'Due This Month' },
+  { value: 'overdue', label: 'Overdue' },
+];
+
 export function Loans() {
-  const { loans, addLoan, updateLoan, deleteLoan, loading } = useLoans();
+  const { loans, emis, addLoan, updateLoan, deleteLoan, markEMIPaid, loading } = useLoans();
   const [showModal, setShowModal] = useState(false);
   const [editingLoan, setEditingLoan] = useState<Loan | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<string>('all');
-  const [showMenu, setShowMenu] = useState<string | null>(null);
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [formErrors, setFormErrors] = useState<Partial<Record<keyof LoanFormData, string>>>({});
+  const [formData, setFormData] = useState<LoanFormData>(emptyForm);
 
-  const [formData, setFormData] = useState({
-    loanName: '',
-    lenderName: '',
-    loanType: 'Personal' as LoanType,
-    currentOutstanding: '',
-    originalLoanAmount: '',
-    emiAmount: '',
-    interestRate: '',
-    emisRemaining: '',
-    totalEmis: '',
-    dueDate: '1',
-    loanStartDate: '',
-    loanEndDate: '',
-    accountNumber: '',
-    notes: '',
-    colorTag: '#3b82f6',
-    loanIcon: 'loan'
-  });
+  const filteredLoans = useMemo(() => {
+    let result = loans;
 
-  const filteredLoans = loans.filter(loan => {
-    const matchesSearch = loan.loanName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         loan.lenderName.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesFilter = filterType === 'all' || loan.loanType === filterType;
-    return matchesSearch && matchesFilter;
-  });
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(loan =>
+        loan.loanName.toLowerCase().includes(q) ||
+        loan.lenderName.toLowerCase().includes(q)
+      );
+    }
+
+    switch (filterStatus) {
+      case 'active':
+        result = result.filter(l => l.status === 'active' || !l.status);
+        break;
+      case 'archived':
+        result = result.filter(l => l.status === 'archived');
+        break;
+      case 'completed':
+        result = result.filter(l => l.status === 'completed' || l.emisRemaining === 0);
+        break;
+      case 'due_week': {
+        const weekEnd = new Date();
+        weekEnd.setDate(weekEnd.getDate() + 7);
+        result = result.filter(l => {
+          const due = new Date();
+          due.setDate(l.dueDate);
+          return l.emisRemaining > 0 && due <= weekEnd;
+        });
+        break;
+      }
+      case 'due_month': {
+        const monthEnd = new Date();
+        monthEnd.setMonth(monthEnd.getMonth() + 1);
+        result = result.filter(l => {
+          const due = new Date();
+          due.setDate(l.dueDate);
+          return l.emisRemaining > 0 && due <= monthEnd;
+        });
+        break;
+      }
+      case 'overdue': {
+        const overdueEmiLoanIds = new Set(emis.filter(e => e.status === 'Overdue').map(e => e.loanId));
+        result = result.filter(l => overdueEmiLoanIds.has(l.id));
+        break;
+      }
+    }
+
+    return result;
+  }, [loans, searchQuery, filterStatus, emis]);
+
+  const validate = (): boolean => {
+    const errors: Partial<Record<keyof LoanFormData, string>> = {};
+
+    if (!formData.loanName.trim()) errors.loanName = 'Loan name is required';
+    if (!formData.lenderName.trim()) errors.lenderName = 'Lender name is required';
+    if (!formData.originalLoanAmount || parseFloat(formData.originalLoanAmount) <= 0) errors.originalLoanAmount = 'Must be > 0';
+    if (!formData.currentOutstanding || parseFloat(formData.currentOutstanding) < 0) errors.currentOutstanding = 'Cannot be negative';
+    if (!formData.emiAmount || parseFloat(formData.emiAmount) <= 0) errors.emiAmount = 'Must be > 0';
+    if (!formData.totalEmis || parseInt(formData.totalEmis) <= 0) errors.totalEmis = 'Must be > 0';
+    if (!formData.emisRemaining || parseInt(formData.emisRemaining) < 0) errors.emisRemaining = 'Cannot be negative';
+    if (!formData.loanStartDate) errors.loanStartDate = 'Start date is required';
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+    if (!validate()) return;
+
+    const emiRemaining = parseInt(formData.emisRemaining);
+    const nextDate = formData.nextEMIDate || new Date().toISOString().split('T')[0];
+
     const loanData = {
-      loanName: formData.loanName,
-      lenderName: formData.lenderName,
+      loanName: formData.loanName.trim(),
+      lenderName: formData.lenderName.trim(),
       loanType: formData.loanType,
-      currentOutstanding: parseFloat(formData.currentOutstanding),
       originalLoanAmount: parseFloat(formData.originalLoanAmount),
+      currentOutstanding: parseFloat(formData.currentOutstanding),
       emiAmount: parseFloat(formData.emiAmount),
-      interestRate: parseFloat(formData.interestRate),
-      emisRemaining: parseInt(formData.emisRemaining),
+      interestRate: 0,
+      processingFee: 0,
+      emisRemaining: emiRemaining,
       totalEmis: parseInt(formData.totalEmis),
-      dueDate: parseInt(formData.dueDate),
+      dueDate: 1,
+      nextEMIDate: nextDate,
       loanStartDate: formData.loanStartDate,
-      loanEndDate: formData.loanEndDate,
-      accountNumber: formData.accountNumber || undefined,
+      loanEndDate: formData.loanStartDate,
+      accountNumber: undefined,
       notes: formData.notes || undefined,
       colorTag: formData.colorTag,
-      loanIcon: formData.loanIcon
+      loanIcon: 'loan',
+      status: 'active' as const,
     };
 
-    if (editingLoan) {
-      await updateLoan(editingLoan.id, loanData);
-    } else {
-      await addLoan(loanData);
+    try {
+      if (editingLoan) {
+        await updateLoan(editingLoan.id, loanData);
+        toast.success('Loan updated');
+      } else {
+        await addLoan(loanData);
+        toast.success('Loan added');
+      }
+      handleCloseModal();
+    } catch {
+      toast.error('Operation failed');
     }
-
-    handleCloseModal();
   };
 
   const handleEdit = (loan: Loan) => {
@@ -87,56 +185,55 @@ export function Loans() {
       loanName: loan.loanName,
       lenderName: loan.lenderName,
       loanType: loan.loanType,
-      currentOutstanding: loan.currentOutstanding.toString(),
       originalLoanAmount: loan.originalLoanAmount.toString(),
+      currentOutstanding: loan.currentOutstanding.toString(),
       emiAmount: loan.emiAmount.toString(),
-      interestRate: loan.interestRate.toString(),
-      emisRemaining: loan.emisRemaining.toString(),
       totalEmis: loan.totalEmis.toString(),
-      dueDate: loan.dueDate.toString(),
-      loanStartDate: loan.loanStartDate,
-      loanEndDate: loan.loanEndDate,
-      accountNumber: loan.accountNumber || '',
+      emisRemaining: loan.emisRemaining.toString(),
+      loanStartDate: loan.loanStartDate.split('T')[0],
+      nextEMIDate: loan.nextEMIDate?.split('T')[0] || '',
       notes: loan.notes || '',
       colorTag: loan.colorTag,
-      loanIcon: loan.loanIcon
     });
     setShowModal(true);
   };
 
   const handleDelete = async (loanId: string) => {
-    if (window.confirm('Are you sure you want to delete this loan?')) {
-      await deleteLoan(loanId);
-      setShowMenu(null);
+    await deleteLoan(loanId);
+    setShowDeleteConfirm(null);
+  };
+
+  const handleMarkPaid = async (loanId: string) => {
+    const pending = emis.find(e => e.loanId === loanId && e.status === 'Pending');
+    if (pending) {
+      await markEMIPaid(pending.id, loanId);
+      toast.success('EMI marked as paid');
+    } else {
+      toast.error('No pending EMI found');
     }
   };
 
   const handleCloseModal = () => {
     setShowModal(false);
     setEditingLoan(null);
-    setFormData({
-      loanName: '',
-      lenderName: '',
-      loanType: 'Personal',
-      currentOutstanding: '',
-      originalLoanAmount: '',
-      emiAmount: '',
-      interestRate: '',
-      emisRemaining: '',
-      totalEmis: '',
-      dueDate: '1',
-      loanStartDate: '',
-      loanEndDate: '',
-      accountNumber: '',
-      notes: '',
-      colorTag: '#3b82f6',
-      loanIcon: 'loan'
-    });
+    setFormData(emptyForm);
+    setFormErrors({});
+  };
+
+  const openAddModal = () => {
+    setEditingLoan(null);
+    setFormData(emptyForm);
+    setFormErrors({});
+    setShowModal(true);
   };
 
   if (loading) {
     return (
-      <div className="p-4 space-y-4">
+      <div className="p-4 pb-24 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="h-8 w-24 bg-slate-800 rounded-lg animate-pulse" />
+          <div className="h-10 w-28 bg-slate-800 rounded-xl animate-pulse" />
+        </div>
         {[1, 2, 3].map((i) => (
           <div key={i} className="bg-slate-800/50 border border-slate-700/50 rounded-2xl p-4 h-32 animate-pulse" />
         ))}
@@ -146,50 +243,44 @@ export function Loans() {
 
   return (
     <div className="p-4 pb-24 space-y-4">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Loans</h1>
-        <Button
-          onClick={() => setShowModal(true)}
-          icon={<Plus size={20} />}
-          size="sm"
-        >
-          Add Loan
-        </Button>
+        <Button onClick={openAddModal} icon={<Plus size={20} />} size="sm">Add Loan</Button>
       </div>
 
-      {/* Search and Filter */}
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search size={20} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input
-            placeholder="Search loans..."
+            placeholder="Search loans or lenders..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10"
           />
         </div>
         <Select
-          value={filterType}
-          onChange={(e) => setFilterType(e.target.value)}
-          className="w-32"
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          className="w-36 text-sm"
         >
-          <option value="all">All Types</option>
-          {LOAN_TYPES.map(type => (
-            <option key={type} value={type}>{type}</option>
+          {FILTER_OPTIONS.map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </Select>
       </div>
 
-      {/* Loans List */}
-      <div className="space-y-3">
-        {filteredLoans.length === 0 ? (
-          <Card gradient className="text-center py-12">
-            <CardContent>
-              <p className="text-slate-400">No loans found</p>
-            </CardContent>
-          </Card>
-        ) : (
-          filteredLoans.map((loan) => {
+      {filteredLoans.length === 0 ? (
+        <Card gradient className="text-center py-12">
+          <CardContent>
+            <p className="text-slate-400 text-lg mb-2">No loans found</p>
+            <p className="text-slate-500 text-sm">
+              {searchQuery || filterStatus !== 'all' ? 'Try a different search or filter' : 'Add your first loan to get started'}
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {filteredLoans.map((loan) => {
             const completion = calculateCompletionPercentage(loan);
             return (
               <motion.div
@@ -198,80 +289,106 @@ export function Loans() {
                 animate={{ opacity: 1, y: 0 }}
                 className="relative"
               >
-                <Card gradient className="relative">
-                  <div className="flex items-start gap-4">
-                    <ProgressRing
-                      progress={completion}
-                      size={80}
-                      className="flex-shrink-0"
-                    >
-                      <span className="text-lg font-bold text-white">{completion.toFixed(0)}%</span>
-                    </ProgressRing>
-                    
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-lg font-semibold text-white truncate">{loan.loanName}</h3>
-                      <p className="text-sm text-slate-400">{loan.lenderName}</p>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                        <div>
-                          <p className="text-slate-500">Outstanding</p>
-                          <p className="font-semibold text-white">{formatCurrency(loan.currentOutstanding)}</p>
+                <Card gradient>
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-4">
+                      <ProgressRing progress={completion} size={72} className="flex-shrink-0">
+                        <span className="text-base font-bold text-white">{completion.toFixed(0)}%</span>
+                      </ProgressRing>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-white truncate">{loan.loanName}</h3>
+                          {loan.status && loan.status !== 'active' && (
+                            <span className={cn('text-xs px-2 py-0.5 rounded-full capitalize', {
+                              'bg-slate-700 text-slate-400': loan.status === 'archived',
+                              'bg-green-900/50 text-green-400': loan.status === 'completed'
+                            })}>
+                              {loan.status}
+                            </span>
+                          )}
                         </div>
-                        <div>
-                          <p className="text-slate-500">EMI</p>
-                          <p className="font-semibold text-white">{formatCurrency(loan.emiAmount)}</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500">Remaining</p>
-                          <p className="font-semibold text-white">{loan.emisRemaining} EMIs</p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500">Due Date</p>
-                          <p className="font-semibold text-white">{loan.dueDate}{getOrdinal(loan.dueDate)}</p>
+                        <p className="text-sm text-slate-400">{loan.lenderName} · {loan.loanType}</p>
+                        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Outstanding</span>
+                            <span className="font-semibold text-white">{formatCurrency(loan.currentOutstanding)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">EMI</span>
+                            <span className="font-semibold text-white">{formatCurrency(loan.emiAmount)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Remaining</span>
+                            <span className="font-semibold text-white">{loan.emisRemaining}/{loan.totalEmis}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Next EMI</span>
+                            <span className="font-semibold text-blue-400">
+                              {emis.find(e => e.loanId === loan.id && e.status === 'Pending')
+                                ? formatDate(emis.find(e => e.loanId === loan.id && e.status === 'Pending')!.dueDate)
+                                : '—'}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowMenu(showMenu === loan.id ? null : loan.id)}
-                        className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+                    <div className="w-full bg-slate-700 rounded-full h-2">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${completion}%` }}
+                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-purple-500"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<CheckCircle size={14} />}
+                        onClick={() => handleMarkPaid(loan.id)}
+                        className="flex-1 text-xs"
                       >
-                        <MoreVertical size={20} className="text-slate-400" />
-                      </button>
-                      
-                      <AnimatePresence>
-                        {showMenu === loan.id && (
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            className="absolute right-0 top-full mt-2 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-10 min-w-32"
-                          >
-                            <button
-                              onClick={() => handleEdit(loan)}
-                              className="w-full px-4 py-3 text-left hover:bg-slate-700 text-white flex items-center gap-2 rounded-t-xl"
-                            >
-                              <Edit size={16} />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDelete(loan.id)}
-                              className="w-full px-4 py-3 text-left hover:bg-slate-700 text-red-400 flex items-center gap-2 rounded-b-xl"
-                            >
-                              <Trash2 size={16} />
-                              Delete
-                            </button>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                        Mark Paid
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<Edit size={14} />}
+                        onClick={() => handleEdit(loan)}
+                        className="flex-1 text-xs"
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon={<Trash2 size={14} />}
+                        onClick={() => setShowDeleteConfirm(loan.id)}
+                        className="flex-1 text-xs"
+                      >
+                        Delete
+                      </Button>
                     </div>
                   </div>
                 </Card>
               </motion.div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      <Modal isOpen={!!showDeleteConfirm} onClose={() => setShowDeleteConfirm(null)} title="Delete Loan">
+        <div className="space-y-4">
+          <p className="text-slate-300">Are you sure you want to delete this loan and all its EMI records? This action cannot be undone.</p>
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setShowDeleteConfirm(null)} className="flex-1">Cancel</Button>
+            <Button variant="danger" onClick={() => handleDelete(showDeleteConfirm!)} className="flex-1">Delete</Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Add/Edit Modal */}
       <Modal
@@ -281,23 +398,27 @@ export function Loans() {
         className="max-w-2xl"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="Loan Name"
+              label="Loan Name *"
               value={formData.loanName}
               onChange={(e) => setFormData({ ...formData, loanName: e.target.value })}
+              error={formErrors.loanName}
+              placeholder="e.g. Home Loan"
               required
             />
             <Input
-              label="Lender Name"
+              label="Lender Name *"
               value={formData.lenderName}
               onChange={(e) => setFormData({ ...formData, lenderName: e.target.value })}
+              error={formErrors.lenderName}
+              placeholder="e.g. SBI"
               required
             />
           </div>
 
           <Select
-            label="Loan Type"
+            label="Loan Type *"
             value={formData.loanType}
             onChange={(e) => setFormData({ ...formData, loanType: e.target.value as LoanType })}
             required
@@ -307,97 +428,86 @@ export function Loans() {
             ))}
           </Select>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="Current Outstanding"
+              label="Original Loan Amount *"
               type="number"
-              value={formData.currentOutstanding}
-              onChange={(e) => setFormData({ ...formData, currentOutstanding: e.target.value })}
-              required
-            />
-            <Input
-              label="Original Loan Amount"
-              type="number"
+              min="0"
+              step="0.01"
               value={formData.originalLoanAmount}
               onChange={(e) => setFormData({ ...formData, originalLoanAmount: e.target.value })}
+              error={formErrors.originalLoanAmount}
+              placeholder="e.g. 5000000"
+              required
+            />
+            <Input
+              label="Outstanding Amount *"
+              type="number"
+              min="0"
+              step="0.01"
+              value={formData.currentOutstanding}
+              onChange={(e) => setFormData({ ...formData, currentOutstanding: e.target.value })}
+              error={formErrors.currentOutstanding}
+              placeholder="e.g. 3500000"
               required
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="EMI Amount"
+              label="EMI Amount *"
               type="number"
+              min="0"
+              step="0.01"
               value={formData.emiAmount}
               onChange={(e) => setFormData({ ...formData, emiAmount: e.target.value })}
+              error={formErrors.emiAmount}
+              placeholder="e.g. 45000"
               required
             />
             <Input
-              label="Interest Rate (%)"
-              type="number"
-              step="0.1"
-              value={formData.interestRate}
-              onChange={(e) => setFormData({ ...formData, interestRate: e.target.value })}
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="EMIs Remaining"
-              type="number"
-              value={formData.emisRemaining}
-              onChange={(e) => setFormData({ ...formData, emisRemaining: e.target.value })}
-              required
-            />
-            <Input
-              label="Total EMIs"
-              type="number"
-              value={formData.totalEmis}
-              onChange={(e) => setFormData({ ...formData, totalEmis: e.target.value })}
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Due Date (Day of Month)"
+              label="Total EMIs *"
               type="number"
               min="1"
-              max="31"
-              value={formData.dueDate}
-              onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+              value={formData.totalEmis}
+              onChange={(e) => setFormData({ ...formData, totalEmis: e.target.value })}
+              error={formErrors.totalEmis}
+              placeholder="e.g. 120"
               required
             />
-            <div />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="Loan Start Date"
+              label="Remaining EMIs *"
+              type="number"
+              min="0"
+              value={formData.emisRemaining}
+              onChange={(e) => setFormData({ ...formData, emisRemaining: e.target.value })}
+              error={formErrors.emisRemaining}
+              placeholder="e.g. 84"
+              required
+            />
+            <Input
+              label="Loan Start Date *"
               type="date"
               value={formData.loanStartDate}
               onChange={(e) => setFormData({ ...formData, loanStartDate: e.target.value })}
-              required
-            />
-            <Input
-              label="Loan End Date"
-              type="date"
-              value={formData.loanEndDate}
-              onChange={(e) => setFormData({ ...formData, loanEndDate: e.target.value })}
+              error={formErrors.loanStartDate}
               required
             />
           </div>
 
           <Input
-            label="Account Number (Optional)"
-            value={formData.accountNumber}
-            onChange={(e) => setFormData({ ...formData, accountNumber: e.target.value })}
+            label="Next EMI Date"
+            type="date"
+            value={formData.nextEMIDate}
+            onChange={(e) => setFormData({ ...formData, nextEMIDate: e.target.value })}
           />
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">Color Tag</label>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {LOAN_COLORS.map(color => (
                 <button
                   key={color}
@@ -405,9 +515,10 @@ export function Loans() {
                   onClick={() => setFormData({ ...formData, colorTag: color })}
                   className={cn(
                     'w-8 h-8 rounded-full transition-all',
-                    formData.colorTag === color ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-900' : ''
+                    formData.colorTag === color ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-900 scale-110' : ''
                   )}
                   style={{ backgroundColor: color }}
+                  aria-label={`Select color ${color}`}
                 />
               ))}
             </div>
@@ -419,6 +530,7 @@ export function Loans() {
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
             multiline
             rows={3}
+            placeholder="Any additional notes about this loan..."
           />
 
           <Button type="submit" className="w-full">
@@ -428,10 +540,4 @@ export function Loans() {
       </Modal>
     </div>
   );
-}
-
-function getOrdinal(n: number): string {
-  const s = ['th', 'st', 'nd', 'rd'];
-  const v = n % 100;
-  return s[(v - 20) % 10] || s[v] || s[0];
 }

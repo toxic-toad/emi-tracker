@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { 
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import {
   User,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -8,76 +8,144 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { auth, isFirebaseConfigured } from '../lib/firebase';
 import { toast } from 'react-hot-toast';
 
 interface AuthContextType {
-  user: User | null;
+  user: User | { uid: string; email: string; displayName: string } | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const LOCAL_USER_KEY = 'emi_tracker_local_user';
+
+function getLocalUser() {
+  try {
+    const data = localStorage.getItem(LOCAL_USER_KEY);
+    return data ? JSON.parse(data) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setLocalUser(user: { uid: string; email: string; displayName: string } | null) {
+  if (user) {
+    localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(user));
+  } else {
+    localStorage.removeItem(LOCAL_USER_KEY);
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | { uid: string; email: string; displayName: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
-    });
-
-    return unsubscribe;
+    if (isFirebaseConfigured()) {
+      const unsubscribe = onAuthStateChanged(auth!, (fbUser) => {
+        setUser(fbUser);
+        setLoading(false);
+      });
+      return unsubscribe;
+    }
+    const localUser = getLocalUser();
+    if (localUser) {
+      setUser(localUser);
+    }
+    setLoading(false);
   }, []);
 
-  const signIn = async (email: string, password: string) => {
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      toast.success('Signed in successfully');
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to sign in');
-      throw error;
+  const signIn = useCallback(async (email: string, password: string) => {
+    if (isFirebaseConfigured()) {
+      try {
+        await signInWithEmailAndPassword(auth!, email, password);
+        toast.success('Signed in successfully');
+      } catch (error: any) {
+        toast.error(error.message || 'Failed to sign in');
+        throw error;
+      }
+    } else {
+      const localUser = { uid: 'local', email, displayName: email.split('@')[0] };
+      setLocalUser(localUser);
+      setUser(localUser);
+      toast.success('Signed in successfully (local mode)');
     }
-  };
+  }, []);
 
-  const signInWithGoogle = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-      toast.success('Signed in with Google');
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to sign in with Google');
-      throw error;
+  const signUp = useCallback(async (email: string, password: string) => {
+    if (isFirebaseConfigured()) {
+      try {
+        const { createUserWithEmailAndPassword } = await import('firebase/auth');
+        await createUserWithEmailAndPassword(auth!, email, password);
+        toast.success('Account created successfully');
+      } catch (error: any) {
+        toast.error(error.message || 'Failed to create account');
+        throw error;
+      }
+    } else {
+      const localUser = { uid: 'local', email, displayName: email.split('@')[0] };
+      setLocalUser(localUser);
+      setUser(localUser);
+      toast.success('Account created successfully (local mode)');
     }
-  };
+  }, []);
 
-  const resetPassword = async (email: string) => {
-    try {
-      await sendPasswordResetEmail(auth, email);
-      toast.success('Password reset email sent');
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to send reset email');
-      throw error;
+  const signInWithGoogle = useCallback(async () => {
+    if (isFirebaseConfigured()) {
+      try {
+        const provider = new GoogleAuthProvider();
+        await signInWithPopup(auth!, provider);
+        toast.success('Signed in with Google');
+      } catch (error: any) {
+        toast.error(error.message || 'Failed to sign in with Google');
+        throw error;
+      }
+    } else {
+      const localUser = { uid: 'local_google', email: 'user@local.app', displayName: 'Local User' };
+      setLocalUser(localUser);
+      setUser(localUser);
+      toast.success('Signed in with Google (local mode)');
     }
-  };
+  }, []);
 
-  const signOut = async () => {
-    try {
-      await firebaseSignOut(auth);
+  const resetPassword = useCallback(async (email: string) => {
+    if (isFirebaseConfigured()) {
+      try {
+        await sendPasswordResetEmail(auth!, email);
+        toast.success('Password reset email sent');
+      } catch (error: any) {
+        toast.error(error.message || 'Failed to send reset email');
+        throw error;
+      }
+    } else {
+      toast.success('Password reset link would be sent (local mode)');
+    }
+  }, []);
+
+  const signOut = useCallback(async () => {
+    if (isFirebaseConfigured()) {
+      try {
+        await firebaseSignOut(auth!);
+        toast.success('Signed out successfully');
+      } catch (error: any) {
+        toast.error(error.message || 'Failed to sign out');
+        throw error;
+      }
+    } else {
+      setLocalUser(null);
+      setUser(null);
       toast.success('Signed out successfully');
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to sign out');
-      throw error;
     }
-  };
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signInWithGoogle, resetPassword, signOut }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signInWithGoogle, signUp, resetPassword, signOut }}>
       {children}
     </AuthContext.Provider>
   );

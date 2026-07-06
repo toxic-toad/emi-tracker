@@ -13,16 +13,18 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
-let messaging: Messaging;
+const hasFirebaseConfig = firebaseConfig.apiKey && firebaseConfig.apiKey !== 'your_api_key';
 
-if (!getApps().length) {
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
+let messaging: Messaging | null = null;
+
+if (hasFirebaseConfig && !getApps().length) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  
+
   if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
     try {
       messaging = getMessaging(app);
@@ -30,10 +32,14 @@ if (!getApps().length) {
       console.log('Firebase Messaging is not supported in this environment');
     }
   }
-} else {
+} else if (hasFirebaseConfig && getApps().length) {
   app = getApps()[0];
   auth = getAuth(app);
   db = getFirestore(app);
 }
 
-export { app, auth, db, messaging };
+export function isFirebaseConfigured(): boolean {
+  return hasFirebaseConfig && auth !== null && db !== null;
+}
+
+export { app, auth, db, messaging, hasFirebaseConfig };

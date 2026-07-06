@@ -1,5 +1,6 @@
 export type LoanType = 'Home' | 'Personal' | 'Credit Card' | 'Vehicle' | 'Education' | 'Gold' | 'BNPL' | 'Other';
 export type PaymentStatus = 'Paid' | 'Pending' | 'Overdue' | 'Skipped';
+export type LoanStatus = 'active' | 'archived' | 'completed';
 
 export interface Loan {
   id: string;
@@ -11,15 +12,18 @@ export interface Loan {
   originalLoanAmount: number;
   emiAmount: number;
   interestRate: number;
+  processingFee: number;
   emisRemaining: number;
   totalEmis: number;
-  dueDate: number; // day of month (1-31)
-  loanStartDate: string; // ISO date string
-  loanEndDate: string; // ISO date string
+  dueDate: number;
+  nextEMIDate: string;
+  loanStartDate: string;
+  loanEndDate: string;
   accountNumber?: string;
   notes?: string;
   colorTag: string;
   loanIcon: string;
+  status: LoanStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -28,12 +32,12 @@ export interface EMI {
   id: string;
   loanId: string;
   userId: string;
-  month: string; // ISO date string for the month
-  dueDate: string; // ISO date string
+  month: string;
+  dueDate: string;
   amount: number;
   status: PaymentStatus;
   lateFee?: number;
-  paymentDate?: string; // ISO date string
+  paymentDate?: string;
   transactionId?: string;
   notes?: string;
   createdAt: string;
@@ -90,4 +94,30 @@ export interface FinancialHealth {
   onTimePaymentRate: number;
   riskLevel: 'Low' | 'Medium' | 'High';
   suggestions: string[];
+}
+
+export interface AIInsight {
+  id: string;
+  type: 'upcoming' | 'highest_emi' | 'highest_interest' | 'closest_completion' | 'completion_savings' | 'debt_reduction' | 'debt_free_month';
+  title: string;
+  description: string;
+  severity: 'info' | 'warning' | 'success';
+  loanId?: string;
+}
+
+export interface DashboardSummary {
+  totalOutstanding: number;
+  totalMonthlyEMI: number;
+  totalLoans: number;
+  nextEMIAmount: number;
+  nextEMIDate: string | null;
+  nextEMILoanName: string;
+  dueToday: number;
+  dueThisWeek: number;
+  overdueAmount: number;
+  debtFreeDate: string | null;
+  paidThisMonth: number;
+  remainingEMIs: number;
+  averageEMI: number;
+  debtReductionPercent: number;
 }

@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion } from 'framer-motion';
 import { Home, CreditCard, Calendar, FileText, Settings, Plus } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -18,15 +17,17 @@ export function Navigation() {
 
   return (
     <>
-      {/* Floating Add Button */}
-      <motion.button
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-        onClick={() => navigate('/loans')}
-        className="fixed bottom-24 right-4 z-50 w-14 h-14 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full shadow-lg shadow-blue-500/30 flex items-center justify-center"
-      >
-        <Plus size={24} className="text-white" />
-      </motion.button>
+      {/* Floating Add Button - Loans page only */}
+      {location.pathname === '/loans' && (
+        <motion.button
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
+          onClick={() => navigate('/loans')}
+          className="fixed bottom-24 right-4 z-50 w-14 h-14 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full shadow-lg shadow-blue-500/30 flex items-center justify-center"
+        >
+          <Plus size={24} className="text-white" />
+        </motion.button>
+      )}
 
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 z-40">

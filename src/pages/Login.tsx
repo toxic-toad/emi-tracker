@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Google, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Chrome, Mail, Lock, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -66,7 +66,7 @@ export function Login() {
               <Button
                 onClick={handleGoogleLogin}
                 loading={loading}
-                icon={<Google size={20} />}
+                icon={<Chrome size={20} />}
                 className="w-full mb-4"
                 variant="secondary"
               >

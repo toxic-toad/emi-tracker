@@ -1,16 +1,18 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CreditCard } from 'lucide-react';
 import { useLoans } from '../contexts/LoanContext';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { formatCurrency, formatDate } from '../utils/formatters';
-import { getDaysUntil } from '../utils/formatters';
+import { Modal } from '../components/ui/Modal';
+import { cn } from '../utils/cn';
+import { formatCurrency, formatDate, getDaysUntil } from '../utils/formatters';
 import { EMI, PaymentStatus } from '../types';
 
 export function Calendar() {
   const { loans, emis, loading } = useLoans();
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedEMI, setSelectedEMI] = useState<EMI | null>(null);
 
   if (loading) {
     return (
@@ -37,9 +39,6 @@ export function Calendar() {
   };
 
   const getEMIForDate = (day: number): EMI | null => {
-    const date = new Date(year, month, day);
-    const dateStr = date.toISOString().split('T')[0];
-    
     return emis.find(emi => {
       const emiDate = new Date(emi.dueDate);
       return emiDate.getDate() === day && 
@@ -101,40 +100,35 @@ export function Calendar() {
               <div key={`empty-${i}`} className="aspect-square" />
             ))}
 
-            {Array.from({ length: daysInMonth }).map((_, i) => {
-              const day = i + 1;
-              const emi = getEMIForDate(day);
-              const today = isToday(day);
+              {Array.from({ length: daysInMonth }).map((_, i) => {
+                const day = i + 1;
+                const emi = getEMIForDate(day);
+                const today = isToday(day);
 
-              return (
-                <motion.button
-                  key={day}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className={cn(
-                    'aspect-square rounded-xl flex flex-col items-center justify-center relative',
-                    'border border-slate-700/50 bg-slate-800/30',
-                    today && 'ring-2 ring-blue-500',
-                    emi && 'cursor-pointer'
-                  )}
-                >
-                  <span className={cn(
-                    'text-sm font-medium',
-                    today ? 'text-blue-400' : 'text-slate-300'
-                  )}>
-                    {day}
-                  </span>
-                  {emi && (
-                    <div
-                      className={cn(
-                        'w-2 h-2 rounded-full mt-1',
-                        getStatusColor(emi.status)
-                      )}
-                    />
-                  )}
-                </motion.button>
-              );
-            })}
+                return (
+                  <motion.button
+                    key={day}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => emi && setSelectedEMI(emi)}
+                    className={cn(
+                      'aspect-square rounded-lg flex flex-col items-center justify-center relative text-xs',
+                      'border border-slate-700/50 bg-slate-800/30',
+                      today && 'ring-2 ring-blue-500',
+                      emi ? 'cursor-pointer hover:bg-slate-700/50' : 'cursor-default'
+                    )}
+                  >
+                    <span className={cn(
+                      'text-xs font-medium',
+                      today ? 'text-blue-400' : 'text-slate-300'
+                    )}>
+                      {day}
+                    </span>
+                    {emi && (
+                      <div className={cn('w-1.5 h-1.5 rounded-full mt-0.5', getStatusColor(emi.status))} />
+                    )}
+                  </motion.button>
+                );
+              })}
           </div>
 
           <div className="flex gap-4 mt-6 justify-center">
@@ -154,65 +148,68 @@ export function Calendar() {
         </CardContent>
       </Card>
 
-      {/* EMI Details for Selected Month */}
-      <Card gradient>
-        <CardContent className="p-4">
-          <h3 className="text-lg font-semibold text-white mb-4">
-            EMI Schedule - {monthNames[month]}
-          </h3>
-          <div className="space-y-3">
-            {emis
-              .filter(emi => {
-                const emiDate = new Date(emi.dueDate);
-                return emiDate.getMonth() === month && emiDate.getFullYear() === year;
-              })
-              .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-              .map(emi => {
-                const loan = loans.find(l => l.id === emi.loanId);
-                const daysUntil = getDaysUntil(emi.dueDate);
-                
-                return (
-                  <div
-                    key={emi.id}
-                    className="flex items-center justify-between p-3 bg-slate-800/50 rounded-xl border border-slate-700/50"
-                  >
-                    <div className="flex-1">
-                      <p className="font-medium text-white">{loan?.loanName || 'Unknown Loan'}</p>
-                      <p className="text-sm text-slate-400">
-                        {formatDate(emi.dueDate)} • {formatCurrency(emi.amount)}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <span className={cn(
-                        'px-2 py-1 rounded-full text-xs font-medium',
-                        emi.status === 'Paid' && 'bg-green-500/20 text-green-400',
-                        emi.status === 'Pending' && 'bg-yellow-500/20 text-yellow-400',
-                        emi.status === 'Overdue' && 'bg-red-500/20 text-red-400',
-                        emi.status === 'Skipped' && 'bg-slate-500/20 text-slate-400'
-                      )}>
-                        {emi.status}
-                      </span>
-                      {emi.status === 'Pending' && daysUntil >= 0 && (
-                        <p className="text-xs text-slate-400 mt-1">{daysUntil} days left</p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            
-            {emis.filter(emi => {
-              const emiDate = new Date(emi.dueDate);
-              return emiDate.getMonth() === month && emiDate.getFullYear() === year;
-            }).length === 0 && (
-              <p className="text-center text-slate-400 py-8">No EMIs scheduled for this month</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {/* EMI Detail Modal */}
+      <Modal
+        isOpen={!!selectedEMI}
+        onClose={() => setSelectedEMI(null)}
+        title="EMI Details"
+      >
+        {selectedEMI && (() => {
+          const loan = loans.find(l => l.id === selectedEMI.loanId);
+          const daysUntil = getDaysUntil(selectedEMI.dueDate);
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                <CreditCard size={20} className="text-slate-400" />
+                <div>
+                  <p className="font-medium text-white">{loan?.loanName || 'Unknown Loan'}</p>
+                  <p className="text-sm text-slate-400">{loan?.lenderName}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Amount</p>
+                  <p className="text-lg font-bold text-white">{formatCurrency(selectedEMI.amount)}</p>
+                </div>
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Status</p>
+                  <span className={cn(
+                    'px-2 py-1 rounded-full text-xs font-medium inline-block mt-1',
+                    selectedEMI.status === 'Paid' && 'bg-green-500/20 text-green-400',
+                    selectedEMI.status === 'Pending' && 'bg-yellow-500/20 text-yellow-400',
+                    selectedEMI.status === 'Overdue' && 'bg-red-500/20 text-red-400',
+                    selectedEMI.status === 'Skipped' && 'bg-slate-500/20 text-slate-400'
+                  )}>
+                    {selectedEMI.status}
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Due Date</p>
+                  <p className="text-sm font-semibold text-white">{formatDate(selectedEMI.dueDate)}</p>
+                </div>
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Days Left</p>
+                  <p className="text-sm font-semibold text-white">
+                    {selectedEMI.status === 'Pending' && daysUntil >= 0 ? `${daysUntil} days` : '—'}
+                  </p>
+                </div>
+              </div>
+              {selectedEMI.paymentDate && (
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Payment Date</p>
+                  <p className="text-sm font-semibold text-green-400">{formatDate(selectedEMI.paymentDate)}</p>
+                </div>
+              )}
+              {selectedEMI.notes && (
+                <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-xs text-slate-400 mb-1">Notes</p>
+                  <p className="text-sm text-white">{selectedEMI.notes}</p>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </Modal>
     </div>
   );
-}
-
-function cn(...classes: (string | boolean | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
 }

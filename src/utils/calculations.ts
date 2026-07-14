@@ -1,5 +1,5 @@
 import { Loan, EMI, FinancialHealth, AIInsight, DashboardSummary } from '../types';
-import { getLoanOutstanding, getLoanCompletionPercent, getLastEMIDate, generateEMISchedule } from './emiSchedule';
+import { getLoanOutstanding, getLoanCompletionPercent, getLastEMIDate } from './emiSchedule';
 import { parseLocalDate, toISODate } from './dateHelpers';
 
 export function calculateTotalOutstanding(loans: Loan[]): number {
@@ -76,34 +76,24 @@ export function calculateOverdueAmount(emis: EMI[]): number {
     .reduce((sum, emi) => sum + emi.amount + (emi.lateFee || 0), 0);
 }
 
-export function calculateDueToday(emis: EMI[], loans: Loan[]): number {
-  const today = toISODate(new Date());
-  return emis
-    .filter(emi => {
-      if (emi.status === 'Paid') return false;
-      const loan = loans.find(l => l.id === emi.loanId);
-      if (!loan || !loan.nextEMIDate) return false;
-      const schedule = generateEMISchedule(loan.nextEMIDate, loan.dueDate, loan.emisRemaining);
-      return schedule.some(s => s.dateStr === today);
-    })
-    .reduce((sum, emi) => sum + emi.amount, 0);
+export function calculateDueToday(_emis: EMI[], loans: Loan[]): number {
+  const todayStr = toISODate(new Date());
+  return loans
+    .filter(loan => loan.emisRemaining > 0 && loan.nextEMIDate === todayStr)
+    .reduce((sum, loan) => sum + loan.emiAmount, 0);
 }
 
-export function calculateDueThisWeek(emis: EMI[], loans: Loan[]): number {
-  const today = new Date();
-  const weekEnd = new Date(today);
+export function calculateDueThisWeek(_emis: EMI[], loans: Loan[]): number {
+  const todayStr = toISODate(new Date());
+  const weekEnd = new Date();
   weekEnd.setDate(weekEnd.getDate() + 7);
   const weekEndStr = toISODate(weekEnd);
-  const todayStr = toISODate(today);
-  return emis
-    .filter(emi => {
-      if (emi.status === 'Paid') return false;
-      const loan = loans.find(l => l.id === emi.loanId);
-      if (!loan || !loan.nextEMIDate) return false;
-      const schedule = generateEMISchedule(loan.nextEMIDate, loan.dueDate, loan.emisRemaining);
-      return schedule.some(s => s.dateStr >= todayStr && s.dateStr <= weekEndStr);
+  return loans
+    .filter(loan => {
+      if (loan.emisRemaining <= 0 || !loan.nextEMIDate) return false;
+      return loan.nextEMIDate >= todayStr && loan.nextEMIDate <= weekEndStr;
     })
-    .reduce((sum, emi) => sum + emi.amount, 0);
+    .reduce((sum, loan) => sum + loan.emiAmount, 0);
 }
 
 export function calculateAverageEMI(loans: Loan[]): number {

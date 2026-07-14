@@ -371,6 +371,12 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    const existingEmi = emis.find(e => e.id === emiId);
+    if (existingEmi?.status === 'Paid') {
+      toast.error('EMI already paid');
+      return;
+    }
+
     const now = new Date().toISOString();
     const intendedDay = loan.dueDate || parseLocalDate(loan.nextEMIDate).getDate() || 1;
 

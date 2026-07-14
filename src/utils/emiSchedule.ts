@@ -85,6 +85,8 @@ export function buildCalendarEMIMap(
     const paidCount = getLoanPaidEMIs(loan);
     const intendedDay = getEffectiveDay(loan);
     const totalScheduleCount = loan.totalEmis;
+    const nextEMIDateParsed = loan.nextEMIDate ? parseLocalDate(loan.nextEMIDate) : null;
+    const nextMonthKey = nextEMIDateParsed ? nextEMIDateParsed.getFullYear() * 12 + nextEMIDateParsed.getMonth() : -1;
 
     for (let i = 0; i < totalScheduleCount; i++) {
       const scheduleDate = addEMIMonths(
@@ -93,6 +95,7 @@ export function buildCalendarEMIMap(
         i
       );
       const key = dateKey(scheduleDate);
+      const scheduleMonthKey = scheduleDate.getFullYear() * 12 + scheduleDate.getMonth();
 
       const existingEmi = emis.find(e => {
         if (e.loanId !== loan.id) return false;
@@ -105,10 +108,10 @@ export function buildCalendarEMIMap(
 
       if (existingEmi && existingEmi.status === 'Paid') {
         displayStatus = 'paid';
+      } else if (nextMonthKey >= 0 && scheduleMonthKey === nextMonthKey) {
+        displayStatus = 'pending';
       } else if (i < paidCount) {
         displayStatus = 'paid';
-      } else if (i === paidCount) {
-        displayStatus = 'pending';
       } else {
         displayStatus = 'future';
       }

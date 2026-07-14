@@ -10,6 +10,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button';
 import { formatCurrency, formatPercentage, formatDate, getDaysUntil, formatRelativeDate } from '../utils/formatters';
 import { safeNumber } from '../utils/formatters';
+import { parseLocalDate } from '../utils/dateHelpers';
 import {
   generateDashboardSummary,
   generateAIInsights,
@@ -60,10 +61,13 @@ export function Dashboard() {
     if (!summary.nextEMIDate || !summary.nextEMILoanName) return null;
     const loan = loans.find(l => l.loanName === summary.nextEMILoanName);
     if (!loan) return null;
-    return emis.find(e =>
-      e.loanId === loan.id &&
-      e.status === 'Paid'
-    ) || null;
+    const nextParsed = parseLocalDate(summary.nextEMIDate);
+    return emis.find(e => {
+      if (e.loanId !== loan.id || e.status !== 'Paid') return false;
+      const emiParsed = parseLocalDate(e.dueDate);
+      return emiParsed.getMonth() === nextParsed.getMonth() &&
+        emiParsed.getFullYear() === nextParsed.getFullYear();
+    }) || null;
   }, [emis, loans, summary]);
 
   const upcomingEMIs = useMemo(() => {
@@ -350,9 +354,10 @@ export function Dashboard() {
                     <span className="text-slate-400">Risk Level</span>
                     <span className={cn(
                       'font-medium',
+                      (health.onTimePaymentRate < 0 && health.debtToIncomeRatio < 0) ? 'text-slate-400' :
                       health.riskLevel === 'Low' ? 'text-green-400' : health.riskLevel === 'Medium' ? 'text-yellow-400' : 'text-red-400'
                     )}>
-                      {health.riskLevel}
+                      {(health.onTimePaymentRate < 0 && health.debtToIncomeRatio < 0) ? 'Not enough data' : health.riskLevel}
                     </span>
                   </div>
                   <div className="flex justify-between text-sm">

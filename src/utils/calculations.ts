@@ -1,6 +1,6 @@
 import { Loan, EMI, FinancialHealth, AIInsight, DashboardSummary } from '../types';
 import { getLoanOutstanding, getLoanCompletionPercent, getLastEMIDate } from './emiSchedule';
-import { parseLocalDate, toISODate } from './dateHelpers';
+import { parseLocalDate, toISODate, getWeekStart, getWeekEnd } from './dateHelpers';
 
 export function calculateTotalOutstanding(loans: Loan[]): number {
   return loans.reduce((sum, loan) => sum + getLoanOutstanding(loan), 0);
@@ -84,14 +84,13 @@ export function calculateDueToday(_emis: EMI[], loans: Loan[]): number {
 }
 
 export function calculateDueThisWeek(_emis: EMI[], loans: Loan[]): number {
-  const todayStr = toISODate(new Date());
-  const weekEnd = new Date();
-  weekEnd.setDate(weekEnd.getDate() + 7);
-  const weekEndStr = toISODate(weekEnd);
+  const today = new Date();
+  const weekStartStr = toISODate(getWeekStart(today));
+  const weekEndStr = toISODate(getWeekEnd(today));
   return loans
     .filter(loan => {
       if (loan.emisRemaining <= 0 || !loan.nextEMIDate) return false;
-      return loan.nextEMIDate >= todayStr && loan.nextEMIDate <= weekEndStr;
+      return loan.nextEMIDate >= weekStartStr && loan.nextEMIDate <= weekEndStr;
     })
     .reduce((sum, loan) => sum + loan.emiAmount, 0);
 }

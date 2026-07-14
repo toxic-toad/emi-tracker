@@ -48,9 +48,7 @@ export function Calendar() {
 
         const existingEmi = emis.find(e => {
           if (e.loanId !== loan.id) return false;
-          const emiParsed = parseLocalDate(e.dueDate);
-          return emiParsed.getMonth() === scheduleDate.getMonth() &&
-            emiParsed.getFullYear() === scheduleDate.getFullYear();
+          return e.dueDate === toISODate(scheduleDate);
         });
 
         let displayStatus: 'paid' | 'pending' | 'future';

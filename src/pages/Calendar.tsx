@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, CreditCard, CheckCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CreditCard, CheckCircle, AlertCircle } from 'lucide-react';
 import { useLoans } from '../contexts/LoanContext';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -9,9 +9,15 @@ import { cn } from '../utils/cn';
 import { formatCurrency, formatDate, getDaysUntil } from '../utils/formatters';
 import { EMI } from '../types';
 
+interface DayEMIInfo {
+  emi: EMI;
+  displayStatus: 'paid' | 'pending';
+}
+
 export function Calendar() {
   const { loans, emis, markEMIPaid, loading } = useLoans();
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDayEmis, setSelectedDayEmis] = useState<DayEMIInfo[]>([]);
   const [selectedEmiId, setSelectedEmiId] = useState<string | null>(null);
   const [confirmingPayment, setConfirmingPayment] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
@@ -37,6 +43,11 @@ export function Calendar() {
   const daysInMonth = lastDay.getDate();
   const startingDay = firstDay.getDay();
 
+  const today = new Date();
+  const isCurrentOrFutureMonth =
+    year > today.getFullYear() ||
+    (year === today.getFullYear() && month >= today.getMonth());
+
   const prevMonth = () => {
     setCurrentDate(new Date(year, month - 1, 1));
   };
@@ -45,38 +56,39 @@ export function Calendar() {
     setCurrentDate(new Date(year, month + 1, 1));
   };
 
-  const getDayEMI = (day: number): { emi: EMI; displayStatus: 'paid' | 'pending' } | null => {
-    const emi = emis.find(emi => {
+  const getDayEMIs = (day: number): DayEMIInfo[] => {
+    const dayEmis = emis.filter(emi => {
       const emiDate = new Date(emi.dueDate);
       return emiDate.getDate() === day &&
              emiDate.getMonth() === month &&
              emiDate.getFullYear() === year;
-    }) || null;
+    });
 
-    if (!emi) return null;
+    if (dayEmis.length === 0) return [];
 
-    const loan = loans.find(l => l.id === emi.loanId);
-    if (!loan) return null;
+    return dayEmis.map(emi => {
+      const loan = loans.find(l => l.id === emi.loanId);
+      if (!loan) return null;
 
-    if (emi.status === 'Paid') return { emi, displayStatus: 'paid' };
+      if (emi.status === 'Paid') return { emi, displayStatus: 'paid' as const };
 
-    if (!loan.nextEMIDate) return null;
+      if (!loan.nextEMIDate) return null;
 
-    const nextDate = new Date(loan.nextEMIDate);
-    const emiDate = new Date(emi.dueDate);
+      const nextDate = new Date(loan.nextEMIDate);
+      const emiDate = new Date(emi.dueDate);
 
-    const isNextMonth = emiDate.getFullYear() === nextDate.getFullYear() &&
-      emiDate.getMonth() === nextDate.getMonth();
+      const isNextMonth = emiDate.getFullYear() === nextDate.getFullYear() &&
+        emiDate.getMonth() === nextDate.getMonth();
 
-    if (isNextMonth) return { emi, displayStatus: 'pending' };
+      if (isNextMonth) return { emi, displayStatus: 'pending' as const };
 
-    if (emiDate < nextDate) return { emi, displayStatus: 'paid' };
+      if (emiDate < nextDate) return { emi, displayStatus: 'paid' as const };
 
-    return null;
+      return null;
+    }).filter((item): item is DayEMIInfo => item !== null);
   };
 
   const isToday = (day: number): boolean => {
-    const today = new Date();
     return day === today.getDate() &&
            month === today.getMonth() &&
            year === today.getFullYear();
@@ -90,7 +102,29 @@ export function Calendar() {
     await markEMIPaid(liveSelectedEMI.id, liveSelectedEMI.loanId);
     setConfirmingPayment(false);
     setPaymentSuccess(true);
+
+    setSelectedDayEmis(prev =>
+      prev.map(item =>
+        item.emi.id === liveSelectedEMI.id
+          ? { ...item, displayStatus: 'paid' as const, emi: { ...item.emi, status: 'Paid' as const } }
+          : item
+      )
+    );
+
     setTimeout(() => setPaymentSuccess(false), 2000);
+  };
+
+  const openDayModal = (day: number) => {
+    const dayEmis = getDayEMIs(day);
+    if (dayEmis.length > 0) {
+      setSelectedDayEmis(dayEmis);
+      setSelectedEmiId(null);
+      setPaymentSuccess(false);
+    }
+  };
+
+  const openEmiDetail = (emiId: string) => {
+    setSelectedEmiId(emiId);
   };
 
   return (
@@ -126,35 +160,50 @@ export function Calendar() {
               <div key={`empty-${i}`} className="aspect-square" />
             ))}
 
-              {Array.from({ length: daysInMonth }).map((_, i) => {
-                const day = i + 1;
-                const dayEmi = getDayEMI(day);
-                const today = isToday(day);
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1;
+              const dayEmis = getDayEMIs(day);
+              const todayHighlight = isToday(day);
+              const hasEmis = dayEmis.length > 0;
+              const paidCount = dayEmis.filter(e => e.displayStatus === 'paid').length;
+              const pendingCount = dayEmis.filter(e => e.displayStatus === 'pending').length;
 
-                return (
-                    <motion.button
-                      key={day}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => { dayEmi && setSelectedEmiId(dayEmi.emi.id); setPaymentSuccess(false); }}
-                      className={cn(
-                      'aspect-square rounded-lg flex flex-col items-center justify-center relative text-xs',
-                      'border border-slate-700/50 bg-slate-800/30',
-                      today && 'ring-2 ring-blue-500',
-                      dayEmi ? 'cursor-pointer hover:bg-slate-700/50' : 'cursor-default'
-                    )}
-                  >
-                    <span className={cn(
-                      'text-xs font-medium',
-                      today ? 'text-blue-400' : 'text-slate-300'
-                    )}>
-                      {day}
-                    </span>
-                    {dayEmi && (
-                      <div className={cn('w-1.5 h-1.5 rounded-full mt-0.5', dayEmi.displayStatus === 'paid' ? 'bg-green-500' : 'bg-yellow-500')} />
-                    )}
-                  </motion.button>
-                );
-              })}
+              return (
+                <motion.button
+                  key={day}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => hasEmis && openDayModal(day)}
+                  className={cn(
+                    'aspect-square rounded-lg flex flex-col items-center justify-center relative text-xs',
+                    'border border-slate-700/50 bg-slate-800/30',
+                    todayHighlight && 'ring-2 ring-blue-500',
+                    hasEmis ? 'cursor-pointer hover:bg-slate-700/50' : 'cursor-default'
+                  )}
+                >
+                  <span className={cn(
+                    'text-xs font-medium',
+                    todayHighlight ? 'text-blue-400' : 'text-slate-300'
+                  )}>
+                    {day}
+                  </span>
+                  {hasEmis && (
+                    <div className="flex items-center gap-0.5 mt-0.5">
+                      {paidCount > 0 && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                      )}
+                      {pendingCount > 0 && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                      )}
+                      {dayEmis.length > 1 && (
+                        <span className="text-[8px] text-slate-400 font-bold ml-0.5 leading-none">
+                          {dayEmis.length}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </motion.button>
+              );
+            })}
           </div>
 
           <div className="flex gap-4 mt-6 justify-center">
@@ -174,18 +223,91 @@ export function Calendar() {
         </CardContent>
       </Card>
 
+      {/* Day EMIs List Modal */}
+      <Modal
+        isOpen={selectedDayEmis.length > 0 && !selectedEmiId}
+        onClose={() => { setSelectedDayEmis([]); setPaymentSuccess(false); }}
+        title={`EMIs - ${monthNames[month]} ${selectedDayEmis[0]?.emi ? new Date(selectedDayEmis[0].emi.dueDate).getDate() : ''}`}
+      >
+        <div className="space-y-3">
+          {paymentSuccess && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex items-center gap-2 p-3 bg-green-900/30 border border-green-500/30 rounded-xl"
+            >
+              <CheckCircle size={20} className="text-green-400" />
+              <span className="text-green-400 font-medium">Payment recorded successfully!</span>
+            </motion.div>
+          )}
+
+          {selectedDayEmis.map(({ emi, displayStatus }) => {
+            const loan = loans.find(l => l.id === emi.loanId);
+            const isPaid = emi.status === 'Paid';
+            const isPastMonthEmi = !isPaid && !isCurrentOrFutureMonth;
+            const effectivePaid = isPaid || isPastMonthEmi;
+
+            return (
+              <motion.button
+                key={emi.id}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => openEmiDetail(emi.id)}
+                className={cn(
+                  'w-full flex items-center gap-3 p-3 rounded-xl border transition-colors text-left',
+                  effectivePaid
+                    ? 'bg-green-900/10 border-green-500/20 hover:bg-green-900/20'
+                    : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50'
+                )}
+              >
+                <div className={cn(
+                  'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0',
+                  effectivePaid ? 'bg-green-500/20' : 'bg-yellow-500/20'
+                )}>
+                  {effectivePaid
+                    ? <CheckCircle size={18} className="text-green-400" />
+                    : <AlertCircle size={18} className="text-yellow-400" />
+                  }
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-white text-sm truncate">
+                    {loan?.loanName || 'Unknown Loan'}
+                  </p>
+                  <p className="text-xs text-slate-400 truncate">{loan?.lenderName}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="font-semibold text-white text-sm">{formatCurrency(emi.amount)}</p>
+                  <span className={cn(
+                    'text-xs font-medium',
+                    effectivePaid ? 'text-green-400' : 'text-yellow-400'
+                  )}>
+                    {effectivePaid ? 'Paid' : displayStatus === 'pending' ? 'Due' : emi.status}
+                  </span>
+                </div>
+              </motion.button>
+            );
+          })}
+
+          <Button variant="secondary" onClick={() => { setSelectedDayEmis([]); setPaymentSuccess(false); }} className="w-full">
+            Close
+          </Button>
+        </div>
+      </Modal>
+
       {/* EMI Detail Modal */}
       <Modal
         isOpen={!!selectedEmiId}
         onClose={() => { setSelectedEmiId(null); setConfirmingPayment(false); setPaymentSuccess(false); }}
         title="EMI Details"
       >
-          {liveSelectedEMI && (() => {
-            const loan = loans.find(l => l.id === liveSelectedEMI.loanId);
-            const daysUntil = getDaysUntil(liveSelectedEMI.dueDate);
-            const totalCount = loan?.totalEmis ?? 0;
-            const paidCount = totalCount - (loan?.emisRemaining ?? 0);
-            const isPaid = liveSelectedEMI.status === 'Paid';
+        {liveSelectedEMI && (() => {
+          const loan = loans.find(l => l.id === liveSelectedEMI.loanId);
+          const daysUntil = getDaysUntil(liveSelectedEMI.dueDate);
+          const totalCount = loan?.totalEmis ?? 0;
+          const paidCount = totalCount - (loan?.emisRemaining ?? 0);
+          const isPaid = liveSelectedEMI.status === 'Paid';
+          const isPastMonthEmi = !isPaid && !isCurrentOrFutureMonth;
+          const effectivePaid = isPaid || isPastMonthEmi;
+          const canMarkPaid = !effectivePaid && isCurrentOrFutureMonth;
 
           return (
             <div className="space-y-4">
@@ -217,18 +339,18 @@ export function Calendar() {
                   <p className="text-xs text-slate-400 mb-1">Current Status</p>
                   <span className={cn(
                     'px-2 py-1 rounded-full text-xs font-medium inline-block mt-1',
-                    isPaid && 'bg-green-500/20 text-green-400',
-                    liveSelectedEMI.status === 'Pending' && 'bg-yellow-500/20 text-yellow-400',
+                    effectivePaid && 'bg-green-500/20 text-green-400',
+                    liveSelectedEMI.status === 'Pending' && !effectivePaid && 'bg-yellow-500/20 text-yellow-400',
                     liveSelectedEMI.status === 'Overdue' && 'bg-red-500/20 text-red-400',
                     liveSelectedEMI.status === 'Skipped' && 'bg-slate-500/20 text-slate-400'
                   )}>
-                    {isPaid ? '✓ Paid' : liveSelectedEMI.status}
+                    {effectivePaid ? '✓ Paid' : liveSelectedEMI.status}
                   </span>
                 </div>
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                   <p className="text-xs text-slate-400 mb-1">Due Date</p>
                   <p className="text-sm font-semibold text-white">{formatDate(liveSelectedEMI.dueDate)}</p>
-                  {!isPaid && daysUntil >= 0 && (
+                  {!effectivePaid && daysUntil >= 0 && (
                     <p className="text-xs text-slate-500 mt-1">
                       {daysUntil === 0 ? 'Today' : `${daysUntil} day${daysUntil !== 1 ? 's' : ''} left`}
                     </p>
@@ -236,8 +358,8 @@ export function Calendar() {
                 </div>
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                   <p className="text-xs text-slate-400 mb-1">Payment Date</p>
-                  <p className={cn('text-sm font-semibold', isPaid ? 'text-green-400' : 'text-slate-500')}>
-                    {liveSelectedEMI.paymentDate ? formatDate(liveSelectedEMI.paymentDate) : '—'}
+                  <p className={cn('text-sm font-semibold', effectivePaid ? 'text-green-400' : 'text-slate-500')}>
+                    {liveSelectedEMI.paymentDate ? formatDate(liveSelectedEMI.paymentDate) : effectivePaid && isPastMonthEmi ? 'Auto-marked' : '—'}
                   </p>
                 </div>
               </div>
@@ -278,17 +400,17 @@ export function Calendar() {
 
               <div className="flex gap-3 pt-2">
                 <Button variant="secondary" onClick={() => { setSelectedEmiId(null); setConfirmingPayment(false); setPaymentSuccess(false); }} className="flex-1">
-                  Cancel
+                  {selectedDayEmis.length > 0 ? 'Back' : 'Cancel'}
                 </Button>
-                {isPaid ? (
+                {effectivePaid ? (
                   <Button variant="secondary" disabled className="flex-1" icon={<CheckCircle size={16} />}>
                     ✓ EMI Already Paid
                   </Button>
-                ) : (
+                ) : canMarkPaid ? (
                   <Button onClick={() => setConfirmingPayment(true)} className="flex-1" icon={<CheckCircle size={16} />}>
                     Mark EMI as Paid
                   </Button>
-                )}
+                ) : null}
               </div>
             </div>
           );

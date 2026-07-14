@@ -98,7 +98,7 @@ export interface FinancialHealth {
 
 export interface AIInsight {
   id: string;
-  type: 'upcoming' | 'highest_emi' | 'largest_outstanding' | 'closest_completion' | 'completion_savings' | 'debt_reduction' | 'debt_free_month' | 'payoff_strategy';
+  type: 'upcoming' | 'highest_emi' | 'highest_interest' | 'closest_completion' | 'completion_savings' | 'debt_reduction' | 'debt_free_month' | 'payoff_strategy';
   title: string;
   description: string;
   severity: 'info' | 'warning' | 'success';

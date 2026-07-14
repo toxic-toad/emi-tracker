@@ -41,38 +41,6 @@ export function getEffectiveDay(loan: Loan): number {
   return loan.dueDate || 1;
 }
 
-export function getExactEMIRecord(loanId: string, scheduledDate: Date, emis: EMI[]): EMI | undefined {
-  const scheduledKey = dateKey(scheduledDate);
-  return emis.find(e => {
-    if (e.loanId !== loanId) return false;
-    return dateKey(parseLocalDate(e.dueDate)) === scheduledKey;
-  });
-}
-
-export function resolveCalendarEMIStatus(
-  scheduledDate: Date,
-  exactEmiRecord: EMI | undefined,
-  today: Date
-): 'paid' | 'pending' | 'future' {
-  if (exactEmiRecord?.status === 'Paid') {
-    return 'paid';
-  }
-
-  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const scheduledMidnight = new Date(scheduledDate.getFullYear(), scheduledDate.getMonth(), scheduledDate.getDate());
-
-  if (scheduledMidnight < todayMidnight) {
-    return 'pending';
-  }
-
-  if (scheduledDate.getFullYear() === today.getFullYear() &&
-      scheduledDate.getMonth() === today.getMonth()) {
-    return 'pending';
-  }
-
-  return 'future';
-}
-
 export function groupEMIsByDate(
   emis: EMI[],
   loans: Loan[]
@@ -110,29 +78,52 @@ export function buildCalendarEMIMap(
   emis: EMI[]
 ): Map<string, { emi: EMI; displayStatus: 'paid' | 'pending' | 'future' }[]> {
   const result = new Map<string, { emi: EMI; displayStatus: 'paid' | 'pending' | 'future' }[]>();
-  const today = new Date();
 
   for (const loan of loans) {
     if (loan.emisRemaining <= 0 && loan.status !== 'active') continue;
 
+    const paidCount = getLoanPaidEMIs(loan);
     const intendedDay = getEffectiveDay(loan);
-    const startDate = parseLocalDate(loan.loanStartDate);
+    const totalScheduleCount = loan.totalEmis;
+    const nextEMIDateParsed = loan.nextEMIDate ? parseLocalDate(loan.nextEMIDate) : null;
+    const nextMonthKey = nextEMIDateParsed ? nextEMIDateParsed.getFullYear() * 12 + nextEMIDateParsed.getMonth() : -1;
 
-    for (let i = 0; i < loan.totalEmis; i++) {
-      const scheduleDate = addEMIMonths(startDate, intendedDay, i);
+    for (let i = 0; i < totalScheduleCount; i++) {
+      const scheduleDate = addEMIMonths(
+        parseLocalDate(loan.loanStartDate),
+        intendedDay,
+        i
+      );
       const key = dateKey(scheduleDate);
+      const scheduleMonthKey = scheduleDate.getFullYear() * 12 + scheduleDate.getMonth();
 
-      const existingEmi = getExactEMIRecord(loan.id, scheduleDate, emis);
-      const resolvedStatus = resolveCalendarEMIStatus(scheduleDate, existingEmi, today);
+      const existingEmi = emis.find(e => {
+        if (e.loanId !== loan.id) return false;
+        const emiParsed = parseLocalDate(e.dueDate);
+        return emiParsed.getMonth() === scheduleDate.getMonth() &&
+          emiParsed.getFullYear() === scheduleDate.getFullYear();
+      });
+
+      let displayStatus: 'paid' | 'pending' | 'future';
+
+      if (existingEmi && existingEmi.status === 'Paid') {
+        displayStatus = 'paid';
+      } else if (nextMonthKey >= 0 && scheduleMonthKey === nextMonthKey) {
+        displayStatus = 'pending';
+      } else if (i < paidCount) {
+        displayStatus = 'paid';
+      } else {
+        displayStatus = 'future';
+      }
 
       const emiRecord: EMI = existingEmi || {
-        id: `${loan.id}_cal_${i}`,
+        id: `${loan.id}_schedule_${i}`,
         loanId: loan.id,
         userId: loan.userId,
         month: toISODate(new Date(scheduleDate.getFullYear(), scheduleDate.getMonth(), 1)),
         dueDate: toISODate(scheduleDate),
         amount: loan.emiAmount,
-        status: resolvedStatus === 'paid' ? 'Paid' : 'Pending',
+        status: displayStatus === 'paid' ? 'Paid' : 'Pending',
         lateFee: 0,
         notes: '',
         createdAt: loan.createdAt,
@@ -141,7 +132,7 @@ export function buildCalendarEMIMap(
 
       const existing = result.get(key) || [];
       if (!existing.find(e => e.emi.loanId === loan.id && e.emi.id === emiRecord.id)) {
-        existing.push({ emi: emiRecord, displayStatus: resolvedStatus });
+        existing.push({ emi: emiRecord, displayStatus });
         result.set(key, existing);
       }
     }

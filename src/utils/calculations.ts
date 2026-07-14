@@ -1,6 +1,6 @@
 import { Loan, EMI, FinancialHealth, AIInsight, DashboardSummary } from '../types';
 import { getLoanOutstanding, getLoanCompletionPercent, getLastEMIDate } from './emiSchedule';
-import { parseLocalDate, toISODate, getWeekStart, getWeekEnd } from './dateHelpers';
+import { parseLocalDate, toISODate } from './dateHelpers';
 
 export function calculateTotalOutstanding(loans: Loan[]): number {
   return loans.reduce((sum, loan) => sum + getLoanOutstanding(loan), 0);
@@ -84,18 +84,6 @@ export function calculateDueToday(_emis: EMI[], loans: Loan[]): number {
 }
 
 export function calculateDueThisWeek(_emis: EMI[], loans: Loan[]): number {
-  const today = new Date();
-  const weekStartStr = toISODate(getWeekStart(today));
-  const weekEndStr = toISODate(getWeekEnd(today));
-  return loans
-    .filter(loan => {
-      if (loan.emisRemaining <= 0 || !loan.nextEMIDate) return false;
-      return loan.nextEMIDate >= weekStartStr && loan.nextEMIDate <= weekEndStr;
-    })
-    .reduce((sum, loan) => sum + loan.emiAmount, 0);
-}
-
-export function calculateDueNext7Days(_emis: EMI[], loans: Loan[]): number {
   const todayStr = toISODate(new Date());
   const weekEnd = new Date();
   weekEnd.setDate(weekEnd.getDate() + 7);
@@ -187,11 +175,16 @@ export function calculateFinancialHealth(
   if (hasPaymentData && onTimeRate < 80) {
     suggestions.push('Improve your payment discipline to boost your credit score.');
   }
+  if (totalDebt > 500000) {
+    suggestions.push('Consider paying off high-interest loans first to save on interest.');
+  }
   if (loans.length > 0) {
     const activeLoans = loans.filter(l => l.emisRemaining > 0);
-    if (activeLoans.length > 1) {
-      const largestOutstanding = [...activeLoans].sort((a, b) => (b.emisRemaining * b.emiAmount) - (a.emisRemaining * a.emiAmount))[0];
-      suggestions.push(`Your largest balance is ${largestOutstanding.loanName} (₹${(largestOutstanding.emisRemaining * largestOutstanding.emiAmount).toLocaleString('en-IN')} remaining). Consider putting extra payments toward it.`);
+    if (activeLoans.length > 0) {
+      const highestInterestLoan = [...activeLoans].sort((a, b) => b.interestRate - a.interestRate)[0];
+      if (highestInterestLoan.interestRate > 0) {
+        suggestions.push(`Prioritize paying off ${highestInterestLoan.loanName} (${highestInterestLoan.interestRate}% interest) to save money.`);
+      }
     }
   }
   const completedLoans = loans.filter(l => l.status === 'completed' || l.emisRemaining === 0);
@@ -216,7 +209,7 @@ export function generateAIInsights(loans: Loan[], emis: EMI[]): AIInsight[] {
   const insights: AIInsight[] = [];
   const activeLoans = loans.filter(l => l.status === 'active' || !l.status);
   const emisForDue = emis.filter(e => e.status !== 'Paid');
-  const dueWeek = calculateDueNext7Days(emisForDue, loans);
+  const dueWeek = calculateDueThisWeek(emisForDue, loans);
   if (dueWeek > 0) {
     insights.push({
       id: 'due_week',
@@ -236,15 +229,17 @@ export function generateAIInsights(loans: Loan[], emis: EMI[]): AIInsight[] {
       severity: 'info',
       loanId: highestEMI.id
     });
-    const largestOutstanding = [...activeLoans].sort((a, b) => (b.emisRemaining * b.emiAmount) - (a.emisRemaining * a.emiAmount))[0];
-    insights.push({
-      id: 'largest_outstanding',
-      type: 'largest_outstanding',
-      title: `Largest balance: ₹${(largestOutstanding.emisRemaining * largestOutstanding.emiAmount).toLocaleString('en-IN')}`,
-      description: `${largestOutstanding.loanName} has the highest outstanding amount with ${largestOutstanding.emisRemaining} EMIs left.`,
-      severity: 'warning',
-      loanId: largestOutstanding.id
-    });
+    const highestInterest = [...activeLoans].sort((a, b) => b.interestRate - a.interestRate)[0];
+    if (highestInterest.interestRate > 0) {
+      insights.push({
+        id: 'highest_interest',
+        type: 'highest_interest',
+        title: `Highest Interest: ${highestInterest.interestRate}%`,
+        description: `${highestInterest.loanName} has the highest interest rate at ${highestInterest.interestRate}%.`,
+        severity: 'warning',
+        loanId: highestInterest.id
+      });
+    }
     const closestToCompletion = [...activeLoans].sort((a, b) => a.emisRemaining - b.emisRemaining)[0];
     if (closestToCompletion.emisRemaining > 0 && closestToCompletion.emisRemaining <= 6) {
       insights.push({
@@ -290,13 +285,13 @@ function generatePayoffStrategy(loans: Loan[]): AIInsight | null {
   const sorted = [...loans].sort((a, b) => {
     const aPct = a.totalEmis > 0 ? (a.totalEmis - a.emisRemaining) / a.totalEmis : 0;
     const bPct = b.totalEmis > 0 ? (b.totalEmis - b.emisRemaining) / b.totalEmis : 0;
-    const aScore = aPct * 0.4 + (a.emisRemaining * a.emiAmount) / 100000 * 0.4 + (1 / (a.emisRemaining || 1)) * 0.2;
-    const bScore = bPct * 0.4 + (b.emisRemaining * b.emiAmount) / 100000 * 0.4 + (1 / (b.emisRemaining || 1)) * 0.2;
+    const aScore = a.interestRate * 0.6 + aPct * 0.3 + (1 / (a.emisRemaining || 1)) * 0.1;
+    const bScore = b.interestRate * 0.6 + bPct * 0.3 + (1 / (b.emisRemaining || 1)) * 0.1;
     return bScore - aScore;
   });
   const top = sorted[0];
   const remainingCost = top.emisRemaining * top.emiAmount;
-  let description = `Focus on clearing "${top.loanName}" first — it has the highest outstanding balance with ${top.emisRemaining} EMIs left (₹${remainingCost.toLocaleString('en-IN')}).`;
+  let description = `Focus on clearing "${top.loanName}" first — it has ${top.interestRate}% interest with ${top.emisRemaining} EMIs left (₹${remainingCost.toLocaleString('en-IN')}).`;
   return {
     id: 'payoff_strategy',
     type: 'payoff_strategy',

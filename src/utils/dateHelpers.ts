@@ -101,3 +101,25 @@ export function isAfterMonthYear(dateStr: string, refDate: Date): boolean {
   const refMonth = refDate.getMonth();
   return d.getFullYear() > refYear || (d.getFullYear() === refYear && d.getMonth() > refMonth);
 }
+
+export function getWeekStart(date: Date): Date {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = d.getDay();
+  const diff = day === 0 ? 6 : day - 1;
+  d.setDate(d.getDate() - diff);
+  return d;
+}
+
+export function getWeekEnd(date: Date): Date {
+  const start = getWeekStart(date);
+  start.setDate(start.getDate() + 6);
+  return start;
+}
+
+export function getMonthStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+export function getMonthEnd(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+}

@@ -7,8 +7,8 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { cn } from '../utils/cn';
 import { formatCurrency, formatDate, getDaysUntil } from '../utils/formatters';
-import { parseLocalDate, toISODate, dateKey, addEMIMonths } from '../utils/dateHelpers';
-import { getLoanOutstanding, getLoanPaidEMIs, getEffectiveDay } from '../utils/emiSchedule';
+import { parseLocalDate, dateKey } from '../utils/dateHelpers';
+import { getLoanOutstanding, getLoanPaidEMIs, buildCalendarEMIMap } from '../utils/emiSchedule';
 import { EMI } from '../types';
 
 interface DayEMIEntry {
@@ -31,62 +31,8 @@ export function Calendar() {
   }, [selectedEmiId, emis, selectedDayEmis]);
 
   const calendarMap = useMemo(() => {
-    const map = new Map<string, DayEMIEntry[]>();
     const activeLoans = loans.filter(l => l.status === 'active' || !l.status);
-
-    for (const loan of activeLoans) {
-      const paidCount = getLoanPaidEMIs(loan);
-      const intendedDay = getEffectiveDay(loan);
-      const startDate = parseLocalDate(loan.loanStartDate);
-      const nextEMIDateParsed = loan.nextEMIDate ? parseLocalDate(loan.nextEMIDate) : null;
-      const nextMonthKey = nextEMIDateParsed ? nextEMIDateParsed.getFullYear() * 12 + nextEMIDateParsed.getMonth() : -1;
-
-      for (let i = 0; i < loan.totalEmis; i++) {
-        const scheduleDate = addEMIMonths(startDate, intendedDay, i);
-        const key = dateKey(scheduleDate);
-        const scheduleMonthKey = scheduleDate.getFullYear() * 12 + scheduleDate.getMonth();
-
-        const existingEmi = emis.find(e => {
-          if (e.loanId !== loan.id) return false;
-          const emiParsed = parseLocalDate(e.dueDate);
-          return emiParsed.getMonth() === scheduleDate.getMonth() &&
-            emiParsed.getFullYear() === scheduleDate.getFullYear();
-        });
-
-        let displayStatus: 'paid' | 'pending' | 'future';
-        if (existingEmi && existingEmi.status === 'Paid') {
-          displayStatus = 'paid';
-        } else if (nextMonthKey >= 0 && scheduleMonthKey === nextMonthKey) {
-          displayStatus = 'pending';
-        } else if (i < paidCount) {
-          displayStatus = 'paid';
-        } else {
-          displayStatus = 'future';
-        }
-
-        const emiRecord: EMI = existingEmi || {
-          id: `${loan.id}_cal_${i}`,
-          loanId: loan.id,
-          userId: loan.userId,
-          month: toISODate(new Date(scheduleDate.getFullYear(), scheduleDate.getMonth(), 1)),
-          dueDate: toISODate(scheduleDate),
-          amount: loan.emiAmount,
-          status: displayStatus === 'paid' ? 'Paid' : 'Pending',
-          lateFee: 0,
-          notes: '',
-          createdAt: loan.createdAt,
-          updatedAt: loan.updatedAt,
-        };
-
-        const existing = map.get(key) || [];
-        if (!existing.find(e => e.emi.loanId === loan.id && e.emi.id === emiRecord.id)) {
-          existing.push({ emi: emiRecord, displayStatus });
-          map.set(key, existing);
-        }
-      }
-    }
-
-    return map;
+    return buildCalendarEMIMap(activeLoans, emis);
   }, [loans, emis]);
 
   if (loading) {
@@ -342,7 +288,7 @@ export function Calendar() {
           const emiParsed = parseLocalDate(liveSelectedEMI.dueDate);
           const todayDate = new Date();
           const isPastEmi = emiParsed < new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
-          const effectivePaid = isPaid || (isPastEmi && !isPaid);
+          const effectivePaid = isPaid;
           const canMarkPaid = !effectivePaid;
 
           return (
@@ -394,7 +340,7 @@ export function Calendar() {
                 <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                   <p className="text-xs text-slate-400 mb-1">Payment Date</p>
                   <p className={cn('text-sm font-semibold', effectivePaid ? 'text-green-400' : 'text-slate-500')}>
-                    {liveSelectedEMI.paymentDate ? formatDate(liveSelectedEMI.paymentDate) : '—'}
+                    {liveSelectedEMI.paymentDate ? formatDate(liveSelectedEMI.paymentDate) : effectivePaid ? 'Not recorded' : '—'}
                   </p>
                 </div>
               </div>

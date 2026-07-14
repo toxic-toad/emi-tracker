@@ -23,10 +23,21 @@ const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4'
 export function Dashboard() {
   const { loans, emis, loading } = useLoans();
 
+  const monthlySalary = useMemo(() => {
+    try {
+      const stored = localStorage.getItem('emi_tracker_settings');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return parsed.monthlySalary as number | undefined;
+      }
+    } catch {}
+    return undefined;
+  }, []);
+
   const activeLoans = useMemo(() => loans.filter(l => l.status === 'active' || !l.status), [loans]);
   const summary = useMemo(() => generateDashboardSummary(activeLoans, emis), [activeLoans, emis]);
   const insights = useMemo(() => generateAIInsights(activeLoans, emis), [activeLoans, emis]);
-  const health = useMemo(() => calculateFinancialHealth(activeLoans, emis), [activeLoans, emis]);
+  const health = useMemo(() => calculateFinancialHealth(activeLoans, emis, monthlySalary), [activeLoans, emis, monthlySalary]);
   const monthlySavings = useMemo(() => calculateMonthlySavings(loans), [loans]);
 
   const nextEMIPaid = useMemo(() => {
@@ -354,7 +365,9 @@ export function Dashboard() {
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-400">Debt/Income</span>
-                    <span className="text-white font-medium">{health.debtToIncomeRatio.toFixed(1)}%</span>
+                    <span className="text-white font-medium">
+                      {health.debtToIncomeRatio >= 0 ? `${health.debtToIncomeRatio.toFixed(1)}%` : 'N/A'}
+                    </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-400">On-Time Payments</span>

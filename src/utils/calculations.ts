@@ -65,10 +65,14 @@ export function calculateEstimatedDebtFreeDate(loans: Loan[]): Date | null {
   const dates = loans
     .filter(l => l.emisRemaining > 0)
     .map(l => {
-      const start = new Date(l.loanStartDate);
-      const end = new Date(start);
-      end.setMonth(end.getMonth() + l.emisRemaining);
-      return end;
+      const nextDate = l.nextEMIDate ? new Date(l.nextEMIDate) : null;
+      if (nextDate) {
+        return addMonths(nextDate, l.emisRemaining - 1);
+      }
+      const paidCount = l.totalEmis - l.emisRemaining;
+      const lastPaidDate = addMonths(new Date(l.loanStartDate), paidCount);
+      lastPaidDate.setDate(l.dueDate);
+      return addMonths(lastPaidDate, l.emisRemaining);
     });
   if (dates.length === 0) return null;
   return new Date(Math.max(...dates.map(d => d.getTime())));
@@ -171,6 +175,15 @@ export function calculateMonthlySavings(loans: Loan[]): number {
     .reduce((sum, l) => sum + l.emiAmount, 0);
 }
 
+function isEMIEffectivelyPaid(emi: EMI, loans: Loan[]): boolean {
+  if (emi.status === 'Paid') return true;
+  const loan = loans.find(l => l.id === emi.loanId);
+  if (!loan || !loan.nextEMIDate) return false;
+  const emiDate = new Date(emi.dueDate);
+  const nextDate = new Date(loan.nextEMIDate);
+  return emiDate < nextDate;
+}
+
 export function calculateFinancialHealth(
   loans: Loan[],
   emis: EMI[],
@@ -179,36 +192,51 @@ export function calculateFinancialHealth(
   const totalDebt = calculateTotalOutstanding(loans);
   const totalMonthlyEMI = calculateTotalMonthlyEMI(loans);
 
-  const paidEmis = emis.filter(e => e.status === 'Paid');
-  const onTimePayments = paidEmis.filter(e => {
-    if (!e.paymentDate) return false;
-    const paymentDate = new Date(e.paymentDate);
-    const dueDate = new Date(e.dueDate);
-    return paymentDate <= dueDate;
+  const effectivePaidEmis = emis.filter(e => isEMIEffectivelyPaid(e, loans));
+
+  const onTimePayments = effectivePaidEmis.filter(e => {
+    if (e.status === 'Paid' && e.paymentDate) {
+      const paymentDate = new Date(e.paymentDate);
+      const dueDate = new Date(e.dueDate);
+      return paymentDate <= dueDate;
+    }
+    return true;
   });
-  const onTimePaymentRate = paidEmis.length > 0
-    ? (onTimePayments.length / paidEmis.length) * 100
+
+  const onTimePaymentRate = effectivePaidEmis.length > 0
+    ? (onTimePayments.length / effectivePaidEmis.length) * 100
     : 100;
 
-  const sortedEmis = [...emis]
-    .filter(e => e.status === 'Paid')
-    .sort((a, b) => new Date(b.paymentDate || '').getTime() - new Date(a.paymentDate || '').getTime());
+  const sortedEmis = [...effectivePaidEmis]
+    .sort((a, b) => {
+      const dateA = a.paymentDate ? new Date(a.paymentDate).getTime() : new Date(a.dueDate).getTime();
+      const dateB = b.paymentDate ? new Date(b.paymentDate).getTime() : new Date(b.dueDate).getTime();
+      return dateB - dateA;
+    });
 
   let streak = 0;
   for (const emi of sortedEmis) {
-    if (emi.status === 'Paid') {
-      streak++;
+    if (emi.status === 'Paid' && emi.paymentDate) {
+      const paymentDate = new Date(emi.paymentDate);
+      const dueDate = new Date(emi.dueDate);
+      if (paymentDate <= dueDate) {
+        streak++;
+      } else {
+        break;
+      }
     } else {
-      break;
+      streak++;
     }
   }
 
   const debtToIncomeRatio = monthlySalary && monthlySalary > 0
     ? (totalMonthlyEMI / monthlySalary) * 100
-    : 0;
+    : -1;
 
   let score = 100;
-  score -= (debtToIncomeRatio > 50 ? 30 : debtToIncomeRatio > 30 ? 15 : 0);
+  if (debtToIncomeRatio >= 0) {
+    score -= (debtToIncomeRatio > 50 ? 30 : debtToIncomeRatio > 30 ? 15 : 0);
+  }
   score -= (100 - onTimePaymentRate) * 0.3;
   score -= (totalDebt > 1000000 ? 10 : totalDebt > 500000 ? 5 : 0);
   score = Math.max(0, Math.min(100, score));
@@ -217,7 +245,7 @@ export function calculateFinancialHealth(
     score >= 70 ? 'Low' : score >= 40 ? 'Medium' : 'High';
 
   const suggestions: string[] = [];
-  if (debtToIncomeRatio > 40) {
+  if (debtToIncomeRatio >= 0 && debtToIncomeRatio > 40) {
     suggestions.push('Your monthly EMI is high relative to your income. Consider debt consolidation.');
   }
   if (onTimePaymentRate < 80) {
@@ -282,22 +310,25 @@ export function generateAIInsights(loans: Loan[], emis: EMI[]): AIInsight[] {
     });
 
     const highestInterest = [...activeLoans].sort((a, b) => b.interestRate - a.interestRate)[0];
-    insights.push({
-      id: 'highest_interest',
-      type: 'highest_interest',
-      title: `Highest Interest: ${highestInterest.interestRate}%`,
-      description: `${highestInterest.loanName} has the highest interest rate at ${highestInterest.interestRate}%. Consider prepayment.`,
-      severity: 'warning',
-      loanId: highestInterest.id
-    });
+    if (highestInterest.interestRate > 0) {
+      const totalInterestSaved = calculateRemainingInterest(highestInterest);
+      insights.push({
+        id: 'highest_interest',
+        type: 'highest_interest',
+        title: `Highest Interest: ${highestInterest.interestRate}%`,
+        description: `${highestInterest.loanName} has the highest interest rate at ${highestInterest.interestRate}%. Prepaying could save you ~${formatCurrency(totalInterestSaved)} in remaining interest.`,
+        severity: 'warning',
+        loanId: highestInterest.id
+      });
+    }
 
     const closestToCompletion = [...activeLoans].sort((a, b) => a.emisRemaining - b.emisRemaining)[0];
-    if (closestToCompletion.emisRemaining > 0) {
+    if (closestToCompletion.emisRemaining > 0 && closestToCompletion.emisRemaining <= 6) {
       insights.push({
         id: 'closest_completion',
         type: 'closest_completion',
         title: `Almost there: ${closestToCompletion.loanName}`,
-        description: `Only ${closestToCompletion.emisRemaining} EMI(s) remaining for ${closestToCompletion.loanName}.`,
+        description: `Only ${closestToCompletion.emisRemaining} EMI(s) remaining. Pay ${formatCurrency(closestToCompletion.emisRemaining * closestToCompletion.emiAmount)} to clear this loan entirely!`,
         severity: 'success',
         loanId: closestToCompletion.id
       });
@@ -314,34 +345,65 @@ export function generateAIInsights(loans: Loan[], emis: EMI[]): AIInsight[] {
         severity: 'success'
       });
     }
-  }
 
-  const totalOutstanding = calculateTotalOutstanding(loans);
-  const paidThisMonth = calculatePaidThisMonth(emis);
-  if (totalOutstanding > 0) {
-    const reduction = (paidThisMonth / totalOutstanding) * 100;
-    insights.push({
-      id: 'debt_reduction',
-      type: 'debt_reduction',
-      title: `Debt reduced by ${reduction.toFixed(1)}% this month`,
-      description: `You've paid off ${formatCurrency(paidThisMonth)} of your total debt this month.`,
-      severity: 'success'
-    });
+    const payoffStrategy = generatePayoffStrategy(activeLoans);
+    if (payoffStrategy) {
+      insights.push(payoffStrategy);
+    }
   }
 
   const debtFreeDate = calculateEstimatedDebtFreeDate(activeLoans);
   if (debtFreeDate) {
-    const months = Math.max(0, (debtFreeDate.getFullYear() - new Date().getFullYear()) * 12 + debtFreeDate.getMonth() - new Date().getMonth());
+    const now = new Date();
+    const months = Math.max(0, (debtFreeDate.getFullYear() - now.getFullYear()) * 12 + debtFreeDate.getMonth() - now.getMonth());
     insights.push({
       id: 'debt_free_month',
       type: 'debt_free_month',
       title: `Debt-free by ${debtFreeDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}`,
-      description: `Approximately ${months} months until all active loans are cleared.`,
+      description: `Approximately ${months} month${months !== 1 ? 's' : ''} until all active loans are cleared.`,
       severity: 'info'
     });
   }
 
   return insights;
+}
+
+function generatePayoffStrategy(loans: Loan[]): AIInsight | null {
+  if (loans.length === 0) return null;
+
+  const sorted = [...loans].sort((a, b) => {
+    const aCompletedPct = a.totalEmis > 0 ? (a.totalEmis - a.emisRemaining) / a.totalEmis : 0;
+    const bCompletedPct = b.totalEmis > 0 ? (b.totalEmis - b.emisRemaining) / b.totalEmis : 0;
+
+    const aScore = a.interestRate * 0.6 + aCompletedPct * 0.3 + (1 / (a.emisRemaining || 1)) * 0.1;
+    const bScore = b.interestRate * 0.6 + bCompletedPct * 0.3 + (1 / (b.emisRemaining || 1)) * 0.1;
+
+    return bScore - aScore;
+  });
+
+  const top = sorted[0];
+  const remainingCost = top.emisRemaining * top.emiAmount;
+  const remainingInterest = calculateRemainingInterest(top);
+
+  let description = `Focus on clearing "${top.loanName}" first — it has ${top.interestRate}% interest with ${top.emisRemaining} EMIs left (${formatCurrency(remainingCost)}).`;
+
+  if (sorted.length > 1) {
+    const second = sorted[1];
+    const secondInterest = calculateRemainingInterest(second);
+    const interestSaved = remainingInterest - secondInterest;
+    if (interestSaved > 0) {
+      description += ` Paying this before "${second.loanName}" could save ~${formatCurrency(interestSaved)} in interest.`;
+    }
+  }
+
+  return {
+    id: 'payoff_strategy',
+    type: 'payoff_strategy',
+    title: `Pay off "${top.loanName}" first`,
+    description,
+    severity: 'info',
+    loanId: top.id
+  };
 }
 
 export function generateDashboardSummary(loans: Loan[], emis: EMI[]): DashboardSummary {

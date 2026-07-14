@@ -2,21 +2,27 @@ import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   TrendingUp, TrendingDown, Calendar, AlertCircle, CheckCircle,
-  Clock, Target, PieChart, LineChart, CreditCard, Banknote,
+  Clock, Target, PieChart, CreditCard, Banknote,
   Brain, Shield, DollarSign, ArrowRight, Sparkles, Plus
 } from 'lucide-react';
 import { useLoans } from '../contexts/LoanContext';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { formatCurrency, formatPercentage, formatDate, getDaysUntil, formatRelativeDate } from '../utils/formatters';
+import { safeNumber } from '../utils/formatters';
 import {
   generateDashboardSummary,
   generateAIInsights,
   calculateFinancialHealth,
   calculateMonthlySavings,
+  calculateDebtReduction,
 } from '../utils/calculations';
-import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { PieChart as RechartsPieChart, Pie, Cell, ResponsiveContainer as PieResponsiveContainer } from 'recharts';
+import { getLoanOutstanding, getLoanCompletionPercent } from '../utils/emiSchedule';
+import { PieChart as RechartsPieChart, Pie, Cell, ResponsiveContainer as PieResponsiveContainer, Tooltip } from 'recharts';
+
+function cn(...classes: (string | boolean | undefined | null)[]) {
+  return classes.filter(Boolean).join(' ');
+}
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f97316', '#6366f1'];
 
@@ -39,17 +45,24 @@ export function Dashboard() {
   const insights = useMemo(() => generateAIInsights(activeLoans, emis), [activeLoans, emis]);
   const health = useMemo(() => calculateFinancialHealth(activeLoans, emis, monthlySalary), [activeLoans, emis, monthlySalary]);
   const monthlySavings = useMemo(() => calculateMonthlySavings(loans), [loans]);
+  const debtReduction = useMemo(() => calculateDebtReduction(activeLoans), [activeLoans]);
+
+  const debtDistribution = useMemo(() =>
+    activeLoans
+      .map(loan => ({
+        name: loan.loanName,
+        value: safeNumber(getLoanOutstanding(loan))
+      }))
+      .filter(d => d.value > 0),
+  [activeLoans]);
 
   const nextEMIPaid = useMemo(() => {
     if (!summary.nextEMIDate || !summary.nextEMILoanName) return null;
     const loan = loans.find(l => l.loanName === summary.nextEMILoanName);
     if (!loan) return null;
-    const nd = new Date(summary.nextEMIDate);
     return emis.find(e =>
       e.loanId === loan.id &&
-      e.status === 'Paid' &&
-      new Date(e.dueDate).getFullYear() === nd.getFullYear() &&
-      new Date(e.dueDate).getMonth() === nd.getMonth()
+      e.status === 'Paid'
     ) || null;
   }, [emis, loans, summary]);
 
@@ -57,9 +70,11 @@ export function Dashboard() {
     return emis
       .filter(e => {
         const loan = loans.find(l => l.id === e.loanId);
-        return loan && loan.nextEMIDate &&
-          new Date(e.dueDate).getFullYear() === new Date(loan.nextEMIDate).getFullYear() &&
-          new Date(e.dueDate).getMonth() === new Date(loan.nextEMIDate).getMonth();
+        if (!loan || !loan.nextEMIDate || loan.emisRemaining <= 0) return false;
+        if (e.status === 'Paid') return false;
+        const eParsed = new Date(e.dueDate);
+        const today = new Date();
+        return eParsed >= new Date(today.getFullYear(), today.getMonth(), today.getDate());
       })
       .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
       .slice(0, 5);
@@ -71,28 +86,6 @@ export function Dashboard() {
       .sort((a, b) => new Date(b.paymentDate!).getTime() - new Date(a.paymentDate!).getTime())
       .slice(0, 5);
   }, [emis]);
-
-  const debtOverTime = useMemo(() =>
-    activeLoans.map(loan => ({
-      name: loan.loanName.substring(0, 10),
-      value: loan.currentOutstanding,
-      fill: loan.colorTag
-    })),
-  [activeLoans]);
-
-  const debtDistribution = useMemo(() =>
-    activeLoans.map(loan => ({
-      name: loan.loanName,
-      value: loan.currentOutstanding
-    })),
-  [activeLoans]);
-
-  const monthlyEMIData = useMemo(() =>
-    activeLoans.map(loan => ({
-      name: loan.loanName.substring(0, 10),
-      value: loan.emiAmount
-    })),
-  [activeLoans]);
 
   if (loading) {
     return (
@@ -119,7 +112,6 @@ export function Dashboard() {
           )}
         </div>
 
-        {/* Premium Summary Cards */}
         <div className="grid grid-cols-2 gap-3">
           <Card gradient>
             <CardHeader>
@@ -264,7 +256,7 @@ export function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xl font-bold text-green-400">{formatPercentage(summary.debtReductionPercent)}</p>
+              <p className="text-xl font-bold text-green-400">{formatPercentage(debtReduction)}</p>
             </CardContent>
           </Card>
 
@@ -349,7 +341,7 @@ export function Dashboard() {
                       'text-xl font-bold',
                       health.score >= 70 ? 'text-green-400' : health.score >= 40 ? 'text-yellow-400' : 'text-red-400'
                     )}>
-                      {health.score}
+                      {Math.round(health.score)}
                     </span>
                   </div>
                 </div>
@@ -366,12 +358,14 @@ export function Dashboard() {
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-400">Debt/Income</span>
                     <span className="text-white font-medium">
-                      {health.debtToIncomeRatio >= 0 ? `${health.debtToIncomeRatio.toFixed(1)}%` : 'N/A'}
+                      {health.debtToIncomeRatio >= 0 ? `${Math.round(health.debtToIncomeRatio)}%` : 'Not set'}
                     </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-400">On-Time Payments</span>
-                    <span className="text-white font-medium">{health.onTimePaymentRate.toFixed(0)}%</span>
+                    <span className="text-white font-medium">
+                      {health.onTimePaymentRate >= 0 ? `${Math.round(health.onTimePaymentRate)}%` : '—'}
+                    </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-400">Payment Streak</span>
@@ -394,90 +388,50 @@ export function Dashboard() {
           </Card>
         )}
 
-        {/* Charts */}
-        {activeLoans.length > 0 && (
-          <div className="space-y-4">
-            <Card gradient>
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2 text-sm">
-                  <LineChart size={18} /> Outstanding Debt
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RechartsLineChart data={debtOverTime}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} />
-                      <YAxis stroke="#94a3b8" fontSize={11} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                        itemStyle={{ color: '#fff' }}
-                      />
-                      <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                    </RechartsLineChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card gradient>
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2 text-sm">
-                  <PieChart size={18} /> Debt Distribution
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-48">
-                  <PieResponsiveContainer width="100%" height="100%">
-                    <RechartsPieChart>
-                      <Pie
-                        data={debtDistribution}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={40}
-                        outerRadius={70}
-                        paddingAngle={4}
-                        dataKey="value"
-                      >
-                        {debtDistribution.map((_entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                        itemStyle={{ color: '#fff' }}
-                      />
-                    </RechartsPieChart>
-                  </PieResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card gradient>
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2 text-sm">
-                  <Calendar size={18} /> Monthly EMI Breakdown
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RechartsLineChart data={monthlyEMIData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} />
-                      <YAxis stroke="#94a3b8" fontSize={11} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                        itemStyle={{ color: '#fff' }}
-                      />
-                      <Line type="monotone" dataKey="value" stroke="#8b5cf6" strokeWidth={2} dot={false} />
-                    </RechartsLineChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+        {/* Debt Distribution Chart */}
+        {activeLoans.length > 0 && debtDistribution.length > 0 && (
+          <Card gradient>
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2 text-sm">
+                <PieChart size={18} /> Outstanding by Loan
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-48">
+                <PieResponsiveContainer width="100%" height="100%">
+                  <RechartsPieChart>
+                    <Pie
+                      data={debtDistribution}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={40}
+                      outerRadius={70}
+                      paddingAngle={4}
+                      dataKey="value"
+                    >
+                      {debtDistribution.map((_entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                      formatter={(value: number) => [formatCurrency(value), 'Outstanding']}
+                      labelStyle={{ color: '#fff' }}
+                    />
+                  </RechartsPieChart>
+                </PieResponsiveContainer>
+              </div>
+              <div className="flex flex-wrap gap-2 mt-2 justify-center">
+                {debtDistribution.map((entry, index) => (
+                  <div key={entry.name} className="flex items-center gap-1.5 text-xs">
+                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                    <span className="text-slate-400">{entry.name}</span>
+                    <span className="text-slate-500">({formatCurrency(entry.value)})</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Upcoming EMIs */}
@@ -557,7 +511,8 @@ export function Dashboard() {
             <CardContent>
               <div className="space-y-2">
                 {activeLoans.map(loan => {
-                  const pct = loan.totalEmis > 0 ? ((loan.totalEmis - loan.emisRemaining) / loan.totalEmis * 100).toFixed(0) : '0';
+                  const pct = getLoanCompletionPercent(loan);
+                  const outstanding = getLoanOutstanding(loan);
                   return (
                     <div key={loan.id} className="p-2.5 bg-slate-800/50 rounded-xl border border-slate-700/50">
                       <div className="flex items-center justify-between mb-2">
@@ -575,7 +530,7 @@ export function Dashboard() {
                         />
                       </div>
                       <div className="flex justify-between mt-1.5 text-xs text-slate-500">
-                        <span>{formatCurrency(loan.currentOutstanding)} outstanding</span>
+                        <span>{formatCurrency(outstanding)} outstanding</span>
                         <span>{loan.emisRemaining} EMIs left</span>
                       </div>
                     </div>
@@ -600,11 +555,6 @@ export function Dashboard() {
           </Card>
         )}
       </motion.div>
-
     </div>
   );
-}
-
-function cn(...classes: (string | boolean | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
 }

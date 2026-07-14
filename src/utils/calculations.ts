@@ -1,114 +1,72 @@
 import { Loan, EMI, FinancialHealth, AIInsight, DashboardSummary } from '../types';
-import { addMonths } from 'date-fns';
-
-export function calculateNextEMI(loan: Loan): Date | null {
-  if (loan.emisRemaining <= 0) return null;
-  const paidCount = loan.totalEmis - loan.emisRemaining;
-  const date = addMonths(new Date(loan.loanStartDate), paidCount);
-  date.setDate(loan.dueDate);
-  return date;
-}
-
-export function calculateEMI(P: number, annualRate: number, n: number): number {
-  if (annualRate === 0) return P / n;
-  const r = annualRate / 12 / 100;
-  const emi = P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
-  return Math.round(emi);
-}
-
-export function calculateAmortizationSchedule(
-  principal: number,
-  annualRate: number,
-  totalMonths: number,
-  emiAmount?: number
-): { month: number; emi: number; interest: number; principal: number; balance: number }[] {
-  if (totalMonths === 0) return [];
-  const r = annualRate / 12 / 100;
-  const emi = emiAmount || calculateEMI(principal, annualRate, totalMonths);
-  const schedule: { month: number; emi: number; interest: number; principal: number; balance: number }[] = [];
-  let balance = principal;
-
-  for (let month = 1; month <= totalMonths && balance > 0; month++) {
-    const interest = Math.round(balance * r);
-    const principalPaid = Math.min(emi - interest, balance);
-    balance = Math.max(0, balance - principalPaid);
-    schedule.push({ month, emi: Math.min(emi, principalPaid + interest), interest, principal: principalPaid, balance });
-  }
-  return schedule;
-}
-
-export function calculateTotalInterest(loan: Loan): number {
-  const schedule = calculateAmortizationSchedule(loan.originalLoanAmount, loan.interestRate, loan.totalEmis, loan.emiAmount);
-  return schedule.reduce((sum, s) => sum + s.interest, 0);
-}
-
-export function calculateRemainingInterest(loan: Loan): number {
-  const totalInterest = calculateTotalInterest(loan);
-  const paidMonths = loan.totalEmis - loan.emisRemaining;
-  const schedule = calculateAmortizationSchedule(loan.originalLoanAmount, loan.interestRate, loan.totalEmis, loan.emiAmount);
-  const paidInterest = schedule.slice(0, paidMonths).reduce((sum, s) => sum + s.interest, 0);
-  return Math.max(0, totalInterest - paidInterest);
-}
-
-export function calculateCompletionPercentage(loan: Loan): number {
-  if (loan.totalEmis === 0) return 0;
-  const completed = loan.totalEmis - loan.emisRemaining;
-  return (completed / loan.totalEmis) * 100;
-}
-
-export function calculateDebtFreeDate(loan: Loan): Date {
-  return new Date(loan.loanEndDate);
-}
-
-export function calculateEstimatedDebtFreeDate(loans: Loan[]): Date | null {
-  if (loans.length === 0) return null;
-  const dates = loans
-    .filter(l => l.emisRemaining > 0)
-    .map(l => {
-      const nextDate = l.nextEMIDate ? new Date(l.nextEMIDate) : null;
-      if (nextDate) {
-        return addMonths(nextDate, l.emisRemaining - 1);
-      }
-      const paidCount = l.totalEmis - l.emisRemaining;
-      const lastPaidDate = addMonths(new Date(l.loanStartDate), paidCount);
-      lastPaidDate.setDate(l.dueDate);
-      return addMonths(lastPaidDate, l.emisRemaining);
-    });
-  if (dates.length === 0) return null;
-  return new Date(Math.max(...dates.map(d => d.getTime())));
-}
+import { getLoanOutstanding, getLoanCompletionPercent, getLastEMIDate, generateEMISchedule } from './emiSchedule';
+import { parseLocalDate, toISODate } from './dateHelpers';
 
 export function calculateTotalOutstanding(loans: Loan[]): number {
-  return loans.reduce((sum, loan) => sum + loan.currentOutstanding, 0);
+  return loans.reduce((sum, loan) => sum + getLoanOutstanding(loan), 0);
+}
+
+export function calculateTotalOriginalLiability(loans: Loan[]): number {
+  return loans.reduce((sum, l) => sum + l.emiAmount * l.totalEmis, 0);
 }
 
 export function calculateTotalMonthlyEMI(loans: Loan[]): number {
   return loans.reduce((sum, loan) => sum + loan.emiAmount, 0);
 }
 
-export function getNextEMIDate(loans: Loan[]): Date | null {
-  const active = loans.filter(l => l.emisRemaining > 0 && l.nextEMIDate);
-  if (active.length === 0) return null;
-
-  const dates = active
-    .map(l => new Date(l.nextEMIDate!))
-    .sort((a, b) => a.getTime() - b.getTime());
-
-  return dates[0] || null;
+export function calculateCompletionPercentage(loan: Loan): number {
+  return getLoanCompletionPercent(loan);
 }
 
-export function getNextEMIDetails(loans: Loan[]): { date: Date | null; amount: number; loanName: string } {
+export function calculatePaidThisMonth(emis: EMI[]): number {
+  const today = new Date();
+  const currentMonth = today.getMonth();
+  const currentYear = today.getFullYear();
+  return emis
+    .filter(emi => {
+      if (emi.status !== 'Paid' || !emi.paymentDate) return false;
+      const pd = parseLocalDate(emi.paymentDate);
+      return pd.getMonth() === currentMonth && pd.getFullYear() === currentYear;
+    })
+    .reduce((sum, emi) => sum + emi.amount, 0);
+}
+
+export function calculateDebtReduction(loans: Loan[]): number {
+  const original = calculateTotalOriginalLiability(loans);
+  const outstanding = calculateTotalOutstanding(loans);
+  if (original <= 0) return 0;
+  return Math.max(0, Math.min(100, ((original - outstanding) / original) * 100));
+}
+
+export function calculateEstimatedDebtFreeDate(loans: Loan[]): Date | null {
+  const dates = loans
+    .filter(l => l.emisRemaining > 0 && l.nextEMIDate)
+    .map(l => getLastEMIDate(l))
+    .filter((d): d is Date => d !== null);
+  if (dates.length === 0) return null;
+  return new Date(Math.max(...dates.map(d => d.getTime())));
+}
+
+export function calculateDebtFreeDateForLoan(loan: Loan): Date | null {
+  if (loan.emisRemaining <= 0 || !loan.nextEMIDate) return null;
+  return getLastEMIDate(loan);
+}
+
+export function calculateNextEMI(loan: Loan): Date | null {
+  if (!loan.nextEMIDate || loan.emisRemaining <= 0) return null;
+  return parseLocalDate(loan.nextEMIDate);
+}
+
+export function calculateNextEMIDetails(loans: Loan[]): { date: Date | null; amount: number; loanName: string } {
   const active = loans.filter(l => l.emisRemaining > 0 && l.nextEMIDate);
   if (active.length === 0) return { date: null, amount: 0, loanName: '' };
-
   const upcoming = active
     .map(loan => ({
-      date: new Date(loan.nextEMIDate!),
+      date: parseLocalDate(loan.nextEMIDate!),
       amount: loan.emiAmount,
       loanName: loan.loanName,
     }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
-
   return upcoming[0] || { date: null, amount: 0, loanName: '' };
 }
 
@@ -118,41 +76,32 @@ export function calculateOverdueAmount(emis: EMI[]): number {
     .reduce((sum, emi) => sum + emi.amount + (emi.lateFee || 0), 0);
 }
 
-export function calculateDueToday(emis: EMI[]): number {
-  const today = new Date();
-  const dateStr = today.toISOString().split('T')[0];
-  return emis
-    .filter(emi => emi.status !== 'Paid' && emi.dueDate.split('T')[0] === dateStr)
-    .reduce((sum, emi) => sum + emi.amount, 0);
-}
-
-export function calculateDueThisWeek(emis: EMI[]): number {
-  const today = new Date();
-  const weekEnd = new Date(today);
-  weekEnd.setDate(weekEnd.getDate() + 7);
+export function calculateDueToday(emis: EMI[], loans: Loan[]): number {
+  const today = toISODate(new Date());
   return emis
     .filter(emi => {
       if (emi.status === 'Paid') return false;
-      const due = new Date(emi.dueDate);
-      return due >= today && due <= weekEnd;
+      const loan = loans.find(l => l.id === emi.loanId);
+      if (!loan || !loan.nextEMIDate) return false;
+      const schedule = generateEMISchedule(loan.nextEMIDate, loan.dueDate, loan.emisRemaining);
+      return schedule.some(s => s.dateStr === today);
     })
     .reduce((sum, emi) => sum + emi.amount, 0);
 }
 
-export function calculatePaidThisMonth(emis: EMI[]): number {
+export function calculateDueThisWeek(emis: EMI[], loans: Loan[]): number {
   const today = new Date();
-  const currentMonth = today.getMonth();
-  const currentYear = today.getFullYear();
-
+  const weekEnd = new Date(today);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  const weekEndStr = toISODate(weekEnd);
+  const todayStr = toISODate(today);
   return emis
     .filter(emi => {
-      const paymentDate = emi.paymentDate ? new Date(emi.paymentDate) : null;
-      return (
-        emi.status === 'Paid' &&
-        paymentDate &&
-        paymentDate.getMonth() === currentMonth &&
-        paymentDate.getFullYear() === currentYear
-      );
+      if (emi.status === 'Paid') return false;
+      const loan = loans.find(l => l.id === emi.loanId);
+      if (!loan || !loan.nextEMIDate) return false;
+      const schedule = generateEMISchedule(loan.nextEMIDate, loan.dueDate, loan.emisRemaining);
+      return schedule.some(s => s.dateStr >= todayStr && s.dateStr <= weekEndStr);
     })
     .reduce((sum, emi) => sum + emi.amount, 0);
 }
@@ -162,26 +111,39 @@ export function calculateAverageEMI(loans: Loan[]): number {
   return loans.reduce((sum, l) => sum + l.emiAmount, 0) / loans.length;
 }
 
-export function calculateDebtReductionPercent(loans: Loan[], emis: EMI[]): number {
-  const totalOutstanding = calculateTotalOutstanding(loans);
-  const paidThisMonth = calculatePaidThisMonth(emis);
-  if (totalOutstanding <= 0) return 0;
-  return (paidThisMonth / totalOutstanding) * 100;
-}
-
 export function calculateMonthlySavings(loans: Loan[]): number {
   return loans
     .filter(l => l.status === 'completed' || l.emisRemaining === 0)
     .reduce((sum, l) => sum + l.emiAmount, 0);
 }
 
-function isEMIEffectivelyPaid(emi: EMI, loans: Loan[]): boolean {
-  if (emi.status === 'Paid') return true;
-  const loan = loans.find(l => l.id === emi.loanId);
-  if (!loan || !loan.nextEMIDate) return false;
-  const emiDate = new Date(emi.dueDate);
-  const nextDate = new Date(loan.nextEMIDate);
-  return emiDate < nextDate;
+export function calculateOnTimePaymentRate(emis: EMI[]): { rate: number; hasData: boolean } {
+  const paidEmis = emis.filter(e => e.status === 'Paid' && e.paymentDate);
+  if (paidEmis.length === 0) return { rate: 0, hasData: false };
+  const onTime = paidEmis.filter(e => {
+    const paymentDate = parseLocalDate(e.paymentDate!);
+    const dueDate = parseLocalDate(e.dueDate);
+    return paymentDate <= dueDate;
+  });
+  return { rate: (onTime.length / paidEmis.length) * 100, hasData: true };
+}
+
+export function calculatePaymentStreak(emis: EMI[]): number {
+  const paidWithDates = emis
+    .filter(e => e.status === 'Paid' && e.paymentDate)
+    .sort((a, b) => parseLocalDate(b.paymentDate!).getTime() - parseLocalDate(a.paymentDate!).getTime());
+
+  let streak = 0;
+  for (const emi of paidWithDates) {
+    const paymentDate = parseLocalDate(emi.paymentDate!);
+    const dueDate = parseLocalDate(emi.dueDate);
+    if (paymentDate <= dueDate) {
+      streak++;
+    } else {
+      break;
+    }
+  }
+  return streak;
 }
 
 export function calculateFinancialHealth(
@@ -192,73 +154,49 @@ export function calculateFinancialHealth(
   const totalDebt = calculateTotalOutstanding(loans);
   const totalMonthlyEMI = calculateTotalMonthlyEMI(loans);
 
-  const effectivePaidEmis = emis.filter(e => isEMIEffectivelyPaid(e, loans));
+  const { rate: onTimeRate, hasData: hasPaymentData } = calculateOnTimePaymentRate(emis);
+  const streak = calculatePaymentStreak(emis);
 
-  const onTimePayments = effectivePaidEmis.filter(e => {
-    if (e.status === 'Paid' && e.paymentDate) {
-      const paymentDate = new Date(e.paymentDate);
-      const dueDate = new Date(e.dueDate);
-      return paymentDate <= dueDate;
-    }
-    return true;
-  });
+  const hasSalary = monthlySalary !== undefined && monthlySalary > 0;
+  const debtToIncomeRatio = hasSalary ? (totalMonthlyEMI / monthlySalary) * 100 : -1;
 
-  const onTimePaymentRate = effectivePaidEmis.length > 0
-    ? (onTimePayments.length / effectivePaidEmis.length) * 100
-    : 100;
-
-  const sortedEmis = [...effectivePaidEmis]
-    .sort((a, b) => {
-      const dateA = a.paymentDate ? new Date(a.paymentDate).getTime() : new Date(a.dueDate).getTime();
-      const dateB = b.paymentDate ? new Date(b.paymentDate).getTime() : new Date(b.dueDate).getTime();
-      return dateB - dateA;
-    });
-
-  let streak = 0;
-  for (const emi of sortedEmis) {
-    if (emi.status === 'Paid' && emi.paymentDate) {
-      const paymentDate = new Date(emi.paymentDate);
-      const dueDate = new Date(emi.dueDate);
-      if (paymentDate <= dueDate) {
-        streak++;
-      } else {
-        break;
-      }
-    } else {
-      streak++;
-    }
+  let score = 50;
+  if (hasPaymentData) {
+    score = onTimeRate;
   }
-
-  const debtToIncomeRatio = monthlySalary && monthlySalary > 0
-    ? (totalMonthlyEMI / monthlySalary) * 100
-    : -1;
-
-  let score = 100;
   if (debtToIncomeRatio >= 0) {
-    score -= (debtToIncomeRatio > 50 ? 30 : debtToIncomeRatio > 30 ? 15 : 0);
+    if (debtToIncomeRatio > 50) score -= 20;
+    else if (debtToIncomeRatio > 30) score -= 10;
+    else if (debtToIncomeRatio <= 20) score += 10;
   }
-  score -= (100 - onTimePaymentRate) * 0.3;
-  score -= (totalDebt > 1000000 ? 10 : totalDebt > 500000 ? 5 : 0);
-  score = Math.max(0, Math.min(100, score));
+  if (totalDebt <= 0) score += 20;
+  score = Math.max(0, Math.min(100, Math.round(score)));
 
   const riskLevel: 'Low' | 'Medium' | 'High' =
+    !hasPaymentData && !hasSalary ? 'Low' :
     score >= 70 ? 'Low' : score >= 40 ? 'Medium' : 'High';
 
   const suggestions: string[] = [];
-  if (debtToIncomeRatio >= 0 && debtToIncomeRatio > 40) {
+  if (!hasSalary) {
+    suggestions.push('Add your monthly income in Settings to calculate debt-to-income risk.');
+  } else if (debtToIncomeRatio > 40) {
     suggestions.push('Your monthly EMI is high relative to your income. Consider debt consolidation.');
   }
-  if (onTimePaymentRate < 80) {
+  if (hasPaymentData && onTimeRate < 80) {
     suggestions.push('Improve your payment discipline to boost your credit score.');
   }
   if (totalDebt > 500000) {
     suggestions.push('Consider paying off high-interest loans first to save on interest.');
   }
   if (loans.length > 0) {
-    const highestInterestLoan = [...loans].sort((a, b) => b.interestRate - a.interestRate)[0];
-    suggestions.push(`Prioritize paying off ${highestInterestLoan.loanName} (${highestInterestLoan.interestRate}% interest) to save money.`);
+    const activeLoans = loans.filter(l => l.emisRemaining > 0);
+    if (activeLoans.length > 0) {
+      const highestInterestLoan = [...activeLoans].sort((a, b) => b.interestRate - a.interestRate)[0];
+      if (highestInterestLoan.interestRate > 0) {
+        suggestions.push(`Prioritize paying off ${highestInterestLoan.loanName} (${highestInterestLoan.interestRate}% interest) to save money.`);
+      }
+    }
   }
-
   const completedLoans = loans.filter(l => l.status === 'completed' || l.emisRemaining === 0);
   if (completedLoans.length > 0) {
     const savings = completedLoans.reduce((sum, l) => sum + l.emiAmount, 0);
@@ -271,7 +209,7 @@ export function calculateFinancialHealth(
     totalDebt,
     totalMonthlyEMI,
     paymentStreak: streak,
-    onTimePaymentRate,
+    onTimePaymentRate: hasPaymentData ? onTimeRate : -1,
     riskLevel,
     suggestions
   };
@@ -280,78 +218,63 @@ export function calculateFinancialHealth(
 export function generateAIInsights(loans: Loan[], emis: EMI[]): AIInsight[] {
   const insights: AIInsight[] = [];
   const activeLoans = loans.filter(l => l.status === 'active' || !l.status);
-
-  const dueThisWeek = calculateDueThisWeek(emis);
-  if (dueThisWeek > 0) {
+  const emisForDue = emis.filter(e => e.status !== 'Paid');
+  const dueWeek = calculateDueThisWeek(emisForDue, loans);
+  if (dueWeek > 0) {
     insights.push({
       id: 'due_week',
       type: 'upcoming',
-      title: `${formatCurrency(dueThisWeek)} due in next 7 days`,
-      description: `You have ${emis.filter(e => {
-        if (e.status === 'Paid') return false;
-        const due = new Date(e.dueDate);
-        const weekEnd = new Date();
-        weekEnd.setDate(weekEnd.getDate() + 7);
-        return due >= new Date() && due <= weekEnd;
-      }).length} payment(s) due this week.`,
+      title: `₹${dueWeek.toLocaleString('en-IN')} due in next 7 days`,
+      description: `You have payments due this week.`,
       severity: 'warning'
     });
   }
-
   if (activeLoans.length > 0) {
     const highestEMI = [...activeLoans].sort((a, b) => b.emiAmount - a.emiAmount)[0];
     insights.push({
       id: 'highest_emi',
       type: 'highest_emi',
-      title: `Highest EMI: ${formatCurrency(highestEMI.emiAmount)}`,
-      description: `${highestEMI.loanName} has the highest monthly EMI at ${formatCurrency(highestEMI.emiAmount)}.`,
+      title: `Highest EMI: ₹${highestEMI.emiAmount.toLocaleString('en-IN')}`,
+      description: `${highestEMI.loanName} has the highest monthly EMI.`,
       severity: 'info',
       loanId: highestEMI.id
     });
-
     const highestInterest = [...activeLoans].sort((a, b) => b.interestRate - a.interestRate)[0];
     if (highestInterest.interestRate > 0) {
-      const totalInterestSaved = calculateRemainingInterest(highestInterest);
       insights.push({
         id: 'highest_interest',
         type: 'highest_interest',
         title: `Highest Interest: ${highestInterest.interestRate}%`,
-        description: `${highestInterest.loanName} has the highest interest rate at ${highestInterest.interestRate}%. Prepaying could save you ~${formatCurrency(totalInterestSaved)} in remaining interest.`,
+        description: `${highestInterest.loanName} has the highest interest rate at ${highestInterest.interestRate}%.`,
         severity: 'warning',
         loanId: highestInterest.id
       });
     }
-
     const closestToCompletion = [...activeLoans].sort((a, b) => a.emisRemaining - b.emisRemaining)[0];
     if (closestToCompletion.emisRemaining > 0 && closestToCompletion.emisRemaining <= 6) {
       insights.push({
         id: 'closest_completion',
         type: 'closest_completion',
         title: `Almost there: ${closestToCompletion.loanName}`,
-        description: `Only ${closestToCompletion.emisRemaining} EMI(s) remaining. Pay ${formatCurrency(closestToCompletion.emisRemaining * closestToCompletion.emiAmount)} to clear this loan entirely!`,
+        description: `Only ${closestToCompletion.emisRemaining} EMI(s) remaining. Pay ₹${(closestToCompletion.emisRemaining * closestToCompletion.emiAmount).toLocaleString('en-IN')} to clear it!`,
         severity: 'success',
         loanId: closestToCompletion.id
       });
     }
-
     const completed = loans.filter(l => l.status === 'completed' || (l.emisRemaining === 0 && l.totalEmis > 0));
     if (completed.length > 0) {
       const savings = completed.reduce((sum, l) => sum + l.emiAmount, 0);
       insights.push({
         id: 'completion_savings',
         type: 'completion_savings',
-        title: `Saving ${formatCurrency(savings)}/month`,
-        description: `Completing ${completed.length} loan(s) has freed up ${formatCurrency(savings)} monthly.`,
+        title: `Saving ₹${savings.toLocaleString('en-IN')}/month`,
+        description: `${completed.length} loan(s) completed, freeing up ₹${savings.toLocaleString('en-IN')} monthly.`,
         severity: 'success'
       });
     }
-
     const payoffStrategy = generatePayoffStrategy(activeLoans);
-    if (payoffStrategy) {
-      insights.push(payoffStrategy);
-    }
+    if (payoffStrategy) insights.push(payoffStrategy);
   }
-
   const debtFreeDate = calculateEstimatedDebtFreeDate(activeLoans);
   if (debtFreeDate) {
     const now = new Date();
@@ -364,38 +287,21 @@ export function generateAIInsights(loans: Loan[], emis: EMI[]): AIInsight[] {
       severity: 'info'
     });
   }
-
   return insights;
 }
 
 function generatePayoffStrategy(loans: Loan[]): AIInsight | null {
   if (loans.length === 0) return null;
-
   const sorted = [...loans].sort((a, b) => {
-    const aCompletedPct = a.totalEmis > 0 ? (a.totalEmis - a.emisRemaining) / a.totalEmis : 0;
-    const bCompletedPct = b.totalEmis > 0 ? (b.totalEmis - b.emisRemaining) / b.totalEmis : 0;
-
-    const aScore = a.interestRate * 0.6 + aCompletedPct * 0.3 + (1 / (a.emisRemaining || 1)) * 0.1;
-    const bScore = b.interestRate * 0.6 + bCompletedPct * 0.3 + (1 / (b.emisRemaining || 1)) * 0.1;
-
+    const aPct = a.totalEmis > 0 ? (a.totalEmis - a.emisRemaining) / a.totalEmis : 0;
+    const bPct = b.totalEmis > 0 ? (b.totalEmis - b.emisRemaining) / b.totalEmis : 0;
+    const aScore = a.interestRate * 0.6 + aPct * 0.3 + (1 / (a.emisRemaining || 1)) * 0.1;
+    const bScore = b.interestRate * 0.6 + bPct * 0.3 + (1 / (b.emisRemaining || 1)) * 0.1;
     return bScore - aScore;
   });
-
   const top = sorted[0];
   const remainingCost = top.emisRemaining * top.emiAmount;
-  const remainingInterest = calculateRemainingInterest(top);
-
-  let description = `Focus on clearing "${top.loanName}" first — it has ${top.interestRate}% interest with ${top.emisRemaining} EMIs left (${formatCurrency(remainingCost)}).`;
-
-  if (sorted.length > 1) {
-    const second = sorted[1];
-    const secondInterest = calculateRemainingInterest(second);
-    const interestSaved = remainingInterest - secondInterest;
-    if (interestSaved > 0) {
-      description += ` Paying this before "${second.loanName}" could save ~${formatCurrency(interestSaved)} in interest.`;
-    }
-  }
-
+  let description = `Focus on clearing "${top.loanName}" first — it has ${top.interestRate}% interest with ${top.emisRemaining} EMIs left (₹${remainingCost.toLocaleString('en-IN')}).`;
   return {
     id: 'payoff_strategy',
     type: 'payoff_strategy',
@@ -408,8 +314,7 @@ function generatePayoffStrategy(loans: Loan[]): AIInsight | null {
 
 export function generateDashboardSummary(loans: Loan[], emis: EMI[]): DashboardSummary {
   const activeLoans = loans.filter(l => l.status === 'active' || !l.status);
-  const nextEMI = getNextEMIDetails(activeLoans);
-
+  const nextEMI = calculateNextEMIDetails(activeLoans);
   return {
     totalOutstanding: calculateTotalOutstanding(activeLoans),
     totalMonthlyEMI: calculateTotalMonthlyEMI(activeLoans),
@@ -417,50 +322,13 @@ export function generateDashboardSummary(loans: Loan[], emis: EMI[]): DashboardS
     nextEMIAmount: nextEMI.amount,
     nextEMIDate: nextEMI.date?.toISOString() || null,
     nextEMILoanName: nextEMI.loanName,
-    dueToday: calculateDueToday(emis),
-    dueThisWeek: calculateDueThisWeek(emis),
+    dueToday: calculateDueToday(emis, activeLoans),
+    dueThisWeek: calculateDueThisWeek(emis, activeLoans),
     overdueAmount: calculateOverdueAmount(emis),
     debtFreeDate: calculateEstimatedDebtFreeDate(activeLoans)?.toISOString() || null,
     paidThisMonth: calculatePaidThisMonth(emis),
     remainingEMIs: activeLoans.reduce((sum, loan) => sum + loan.emisRemaining, 0),
     averageEMI: calculateAverageEMI(activeLoans),
-    debtReductionPercent: calculateDebtReductionPercent(activeLoans, emis)
+    debtReductionPercent: calculateDebtReduction(activeLoans)
   };
-}
-
-export function generateMonthlyEMIs(loan: Loan): EMI[] {
-  const emis: EMI[] = [];
-  const startDate = new Date(loan.loanStartDate);
-  const endDate = new Date(loan.loanEndDate);
-
-  let currentDate = new Date(startDate);
-  currentDate.setDate(loan.dueDate);
-
-  let emiCount = 0;
-  while (emiCount < loan.totalEmis && currentDate <= endDate) {
-    const dueDate = new Date(currentDate);
-    const month = dueDate.toISOString().slice(0, 7);
-
-    emis.push({
-      id: `${loan.id}-${emiCount}-${Date.now()}`,
-      loanId: loan.id,
-      userId: loan.userId,
-      month,
-      dueDate: dueDate.toISOString(),
-      amount: loan.emiAmount,
-      status: 'Pending',
-      lateFee: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
-
-    currentDate.setMonth(currentDate.getMonth() + 1);
-    emiCount++;
-  }
-
-  return emis;
-}
-
-function formatCurrency(amount: number): string {
-  return `₹${amount.toLocaleString('en-IN')}`;
 }

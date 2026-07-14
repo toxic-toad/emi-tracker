@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
 import { useAuth } from './AuthContext';
-import { addMonths } from 'date-fns';
+import { toISODate, parseLocalDate, addEMIMonths } from '../utils/dateHelpers';
 
 interface LoanContextType {
   loans: Loan[];
@@ -59,6 +59,41 @@ function setLocalData<T>(key: string, data: T[]) {
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+function migrateLoanData(loans: Loan[], emis: EMI[]): { loans: Loan[]; emis: EMI[] } {
+  const migratedLoans = loans.map(loan => {
+    const emiAmount = Number(loan.emiAmount) || 0;
+    const emisRemaining = Math.max(0, Math.min(Number(loan.emisRemaining) || 0, Number(loan.totalEmis) || 0));
+    const totalEmis = Number(loan.totalEmis) || 0;
+
+    let nextEMIDate = loan.nextEMIDate;
+    if (!nextEMIDate || isNaN(new Date(nextEMIDate).getTime())) {
+      nextEMIDate = loan.loanStartDate || new Date().toISOString();
+    }
+
+    const dueDay = loan.dueDate || parseLocalDate(nextEMIDate).getDate() || 1;
+
+    return {
+      ...loan,
+      emiAmount,
+      emisRemaining,
+      totalEmis,
+      dueDate: dueDay,
+      nextEMIDate,
+      currentOutstanding: emiAmount * emisRemaining,
+      interestRate: Number(loan.interestRate) || 0,
+      processingFee: Number(loan.processingFee) || 0,
+      originalLoanAmount: Number(loan.originalLoanAmount) || 0,
+    };
+  });
+
+  const migratedEmis = emis.map(emi => ({
+    ...emi,
+    amount: Number(emi.amount) || 0,
+  }));
+
+  return { loans: migratedLoans, emis: migratedEmis };
 }
 
 export function LoanProvider({ children }: { children: React.ReactNode }) {
@@ -153,39 +188,44 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
     const storedLoans = getLocalData<Loan>(STORAGE_KEYS.LOANS);
     const storedEmis = getLocalData<EMI>(STORAGE_KEYS.EMIS);
     const storedPaymentHistory = getLocalData<PaymentHistory>(STORAGE_KEYS.PAYMENT_HISTORY);
-    setLoans(storedLoans);
-    setEmis(storedEmis);
+    const { loans: ml, emis: me } = migrateLoanData(storedLoans, storedEmis);
+    setLoans(ml);
+    setEmis(me);
     setPaymentHistory(storedPaymentHistory);
+    setLocalData(STORAGE_KEYS.LOANS, ml);
+    setLocalData(STORAGE_KEYS.EMIS, me);
     setLoading(false);
   }, [userId]);
 
   const addLoan = useCallback(async (loan: Omit<Loan, 'id' | 'userId' | 'createdAt' | 'updatedAt'>) => {
+    const dueDay = loan.dueDate || parseLocalDate(loan.nextEMIDate).getDate() || 1;
+    const emiAmount = Number(loan.emiAmount) || 0;
+    const emisRemaining = Number(loan.emisRemaining) || 0;
+
     const newLoan: Loan = {
       ...loan,
       id: generateId(),
       userId,
       status: loan.status || 'active',
+      dueDate: dueDay,
+      currentOutstanding: emiAmount * emisRemaining,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
     const newEmis: EMI[] = [];
-    const startDate = new Date(loan.loanStartDate);
+    const startDate = parseLocalDate(loan.loanStartDate);
     for (let i = 0; i < loan.totalEmis; i++) {
-      const dueDate = new Date(startDate);
-      dueDate.setMonth(dueDate.getMonth() + i);
-      dueDate.setDate(loan.dueDate);
-
-      const monthDate = new Date(dueDate);
-      monthDate.setDate(1);
+      const dueDate = addEMIMonths(startDate, dueDay, i);
+      const monthDate = new Date(dueDate.getFullYear(), dueDate.getMonth(), 1);
 
       newEmis.push({
         id: `${newLoan.id}_${i}`,
         loanId: newLoan.id,
         userId,
-        month: monthDate.toISOString(),
-        amount: loan.emiAmount,
-        dueDate: dueDate.toISOString(),
+        month: toISODate(monthDate),
+        amount: emiAmount,
+        dueDate: toISODate(dueDate),
         status: 'Pending',
         lateFee: 0,
         notes: '',
@@ -203,9 +243,9 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
           id: loanRef.id,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-          loanStartDate: Timestamp.fromDate(new Date(loan.loanStartDate)),
-          loanEndDate: Timestamp.fromDate(new Date(loan.loanEndDate)),
-          nextEMIDate: loan.nextEMIDate ? Timestamp.fromDate(new Date(loan.nextEMIDate)) : null,
+          loanStartDate: Timestamp.fromDate(parseLocalDate(loan.loanStartDate)),
+          loanEndDate: Timestamp.fromDate(parseLocalDate(loan.loanEndDate)),
+          nextEMIDate: loan.nextEMIDate ? Timestamp.fromDate(parseLocalDate(loan.nextEMIDate)) : null,
         });
 
         for (const emi of newEmis) {
@@ -213,7 +253,7 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
           batch.set(emiRef, {
             ...emi,
             id: emiRef.id,
-            dueDate: Timestamp.fromDate(new Date(emi.dueDate)),
+            dueDate: Timestamp.fromDate(parseLocalDate(emi.dueDate)),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
@@ -241,15 +281,25 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
   }, [userId]);
 
   const updateLoan = useCallback(async (id: string, loanData: Partial<Loan>) => {
-    const updated = { ...loanData, updatedAt: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const updated = { ...loanData, updatedAt: now };
+
+    if (loanData.emiAmount !== undefined || loanData.emisRemaining !== undefined) {
+      const currentLoan = loans.find(l => l.id === id);
+      if (currentLoan) {
+        const emiAmount = loanData.emiAmount ?? currentLoan.emiAmount;
+        const emisRemaining = loanData.emisRemaining ?? currentLoan.emisRemaining;
+        updated.currentOutstanding = emiAmount * emisRemaining;
+      }
+    }
 
     if (isFirebaseConfigured() && userId !== 'local') {
       try {
         const loanRef = doc(db!, 'loans', id);
         const firestoreData: any = { ...updated };
-        if (updated.loanStartDate) firestoreData.loanStartDate = Timestamp.fromDate(new Date(updated.loanStartDate));
-        if (updated.loanEndDate) firestoreData.loanEndDate = Timestamp.fromDate(new Date(updated.loanEndDate));
-        if (updated.nextEMIDate) firestoreData.nextEMIDate = Timestamp.fromDate(new Date(updated.nextEMIDate));
+        if (updated.loanStartDate) firestoreData.loanStartDate = Timestamp.fromDate(parseLocalDate(updated.loanStartDate));
+        if (updated.loanEndDate) firestoreData.loanEndDate = Timestamp.fromDate(parseLocalDate(updated.loanEndDate));
+        if (updated.nextEMIDate) firestoreData.nextEMIDate = Timestamp.fromDate(parseLocalDate(updated.nextEMIDate));
         await updateDoc(loanRef, firestoreData);
         toast.success('Loan updated successfully');
       } catch (err: any) {
@@ -264,7 +314,7 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
       });
       toast.success('Loan updated successfully');
     }
-  }, [userId]);
+  }, [userId, loans]);
 
   const deleteLoan = useCallback(async (id: string) => {
     if (isFirebaseConfigured() && userId !== 'local') {
@@ -322,6 +372,7 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
     }
 
     const now = new Date().toISOString();
+    const intendedDay = loan.dueDate || parseLocalDate(loan.nextEMIDate).getDate() || 1;
 
     if (isFirebaseConfigured() && userId !== 'local') {
       try {
@@ -340,17 +391,17 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
           }
         });
 
-        const newRemaining = loan.emisRemaining - 1;
+        const newRemaining = Math.max(0, loan.emisRemaining - 1);
         const nextDate = newRemaining > 0
-          ? Timestamp.fromDate(addMonths(new Date(loan.nextEMIDate || loan.loanStartDate), 1))
+          ? addEMIMonths(parseLocalDate(loan.nextEMIDate || loan.loanStartDate), intendedDay, 1)
           : null;
         const loanUpdate: Record<string, any> = {
-          emisRemaining: Math.max(0, newRemaining),
-          currentOutstanding: Math.max(0, loan.currentOutstanding - loan.emiAmount),
+          emisRemaining: newRemaining,
+          currentOutstanding: loan.emiAmount * newRemaining,
           updatedAt: serverTimestamp()
         };
         if (nextDate) {
-          loanUpdate.nextEMIDate = nextDate;
+          loanUpdate.nextEMIDate = Timestamp.fromDate(nextDate);
         }
         if (newRemaining <= 0) {
           loanUpdate.status = 'completed';
@@ -363,7 +414,10 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
         toast.error(err.message || 'Failed to mark EMI as paid');
       }
     } else {
-      const newRemaining = loan.emisRemaining - 1;
+      const newRemaining = Math.max(0, loan.emisRemaining - 1);
+      const nextDate = newRemaining > 0
+        ? addEMIMonths(parseLocalDate(loan.nextEMIDate || loan.loanStartDate), intendedDay, 1)
+        : null;
 
       setEmis(prev => {
         const updated = prev.map(e =>
@@ -376,17 +430,13 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
       });
 
       setLoans(prev => {
-        const newOutstanding = Math.max(0, loan.currentOutstanding - loan.emiAmount);
-        const nextDate = newRemaining > 0
-          ? addMonths(new Date(loan.nextEMIDate || loan.loanStartDate), 1).toISOString()
-          : undefined;
         const updated = prev.map(l =>
           l.id === loanId
             ? {
                 ...l,
-                emisRemaining: Math.max(0, newRemaining),
-                currentOutstanding: newOutstanding,
-                nextEMIDate: nextDate || l.nextEMIDate,
+                emisRemaining: newRemaining,
+                currentOutstanding: l.emiAmount * newRemaining,
+                nextEMIDate: nextDate ? toISODate(nextDate) : l.nextEMIDate,
                 ...(newRemaining <= 0 ? { status: 'completed' as const } : {}),
                 updatedAt: now
               }
@@ -471,8 +521,9 @@ export function LoanProvider({ children }: { children: React.ReactNode }) {
     const storedLoans = getLocalData<Loan>(STORAGE_KEYS.LOANS);
     const storedEmis = getLocalData<EMI>(STORAGE_KEYS.EMIS);
     const storedPaymentHistory = getLocalData<PaymentHistory>(STORAGE_KEYS.PAYMENT_HISTORY);
-    setLoans(storedLoans);
-    setEmis(storedEmis);
+    const { loans: ml, emis: me } = migrateLoanData(storedLoans, storedEmis);
+    setLoans(ml);
+    setEmis(me);
     setPaymentHistory(storedPaymentHistory);
     setLoading(false);
   }, [userId]);

@@ -9,11 +9,9 @@ import { Modal } from '../components/ui/Modal';
 import { Input, Select } from '../components/ui/Input';
 import { ProgressRing } from '../components/ui/ProgressRing';
 import { cn } from '../utils/cn';
-import {
-  formatCurrency,
-  formatDate
-} from '../utils/formatters';
-import { calculateCompletionPercentage, calculateNextEMI } from '../utils/calculations';
+import { formatCurrency, formatDate } from '../utils/formatters';
+import { getLoanOutstanding, getLoanCompletionPercent } from '../utils/emiSchedule';
+import { parseLocalDate, toISODate } from '../utils/dateHelpers';
 import { toast } from 'react-hot-toast';
 
 const LOAN_TYPES: LoanType[] = ['Home', 'Personal', 'Credit Card', 'Vehicle', 'Education', 'Gold', 'BNPL', 'Other'];
@@ -69,7 +67,6 @@ export function Loans() {
 
   const filteredLoans = useMemo(() => {
     let result = loans;
-
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter(loan =>
@@ -77,7 +74,6 @@ export function Loans() {
         loan.lenderName.toLowerCase().includes(q)
       );
     }
-
     switch (filterStatus) {
       case 'active':
         result = result.filter(l => l.status === 'active' || !l.status);
@@ -91,21 +87,13 @@ export function Loans() {
       case 'due_week': {
         const weekEnd = new Date();
         weekEnd.setDate(weekEnd.getDate() + 7);
-        result = result.filter(l => {
-          const due = new Date();
-          due.setDate(l.dueDate);
-          return l.emisRemaining > 0 && due <= weekEnd;
-        });
+        result = result.filter(l => l.emisRemaining > 0 && l.nextEMIDate && parseLocalDate(l.nextEMIDate) <= weekEnd);
         break;
       }
       case 'due_month': {
         const monthEnd = new Date();
         monthEnd.setMonth(monthEnd.getMonth() + 1);
-        result = result.filter(l => {
-          const due = new Date();
-          due.setDate(l.dueDate);
-          return l.emisRemaining > 0 && due <= monthEnd;
-        });
+        result = result.filter(l => l.emisRemaining > 0 && l.nextEMIDate && parseLocalDate(l.nextEMIDate) <= monthEnd);
         break;
       }
       case 'overdue': {
@@ -114,13 +102,11 @@ export function Loans() {
         break;
       }
     }
-
     return result;
   }, [loans, searchQuery, filterStatus, emis]);
 
   const validate = (): boolean => {
     const errors: Partial<Record<keyof LoanFormData, string>> = {};
-
     if (!formData.loanName.trim()) errors.loanName = 'Loan name is required';
     if (!formData.lenderName.trim()) errors.lenderName = 'Lender name is required';
     if (!formData.originalLoanAmount || parseFloat(formData.originalLoanAmount) <= 0) errors.originalLoanAmount = 'Original loan amount must be greater than zero';
@@ -129,8 +115,7 @@ export function Loans() {
     if (!formData.emisRemaining || parseInt(formData.emisRemaining) < 0) errors.emisRemaining = 'Remaining EMIs cannot be negative';
     if (formData.emisRemaining && formData.totalEmis && parseInt(formData.emisRemaining) > parseInt(formData.totalEmis)) errors.emisRemaining = 'Remaining EMIs cannot exceed Total EMIs';
     if (!formData.loanStartDate) errors.loanStartDate = 'Start date is required';
-    if (formData.loanStartDate && formData.nextEMIDate && formData.nextEMIDate < formData.loanStartDate) errors.nextEMIDate = 'Next EMI date cannot be before Loan Start Date';
-
+    if (formData.nextEMIDate && formData.loanStartDate && formData.nextEMIDate < formData.loanStartDate) errors.nextEMIDate = 'Next EMI date cannot be before Loan Start Date';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -140,12 +125,21 @@ export function Loans() {
     if (!validate()) return;
 
     const emiAmount = parseFloat(formData.emiAmount);
-    const emiRemaining = parseInt(formData.emisRemaining);
+    const emisRemaining = parseInt(formData.emisRemaining);
     const totalEmis = parseInt(formData.totalEmis);
-    const outstanding = emiAmount * emiRemaining;
-    const computedLoan = { loanStartDate: formData.loanStartDate, totalEmis, emisRemaining: emiRemaining, dueDate: 1 } as Loan;
-    const defaultNext = calculateNextEMI(computedLoan);
-    const nextDate = formData.nextEMIDate || (defaultNext ? defaultNext.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+    const outstanding = emiAmount * emisRemaining;
+
+    let nextEMIDate = formData.nextEMIDate;
+    if (!nextEMIDate) {
+      const startDate = parseLocalDate(formData.loanStartDate);
+      const paidCount = totalEmis - emisRemaining;
+      const d = new Date(startDate);
+      d.setMonth(d.getMonth() + paidCount);
+      nextEMIDate = toISODate(d);
+    }
+
+    const dueDay = parseLocalDate(nextEMIDate).getDate();
+    const loanEndDate = toISODate(addEMIMonths(parseLocalDate(formData.loanStartDate), dueDay, totalEmis - 1));
 
     const loanData = {
       loanName: formData.loanName.trim(),
@@ -153,15 +147,15 @@ export function Loans() {
       loanType: formData.loanType,
       originalLoanAmount: parseFloat(formData.originalLoanAmount),
       currentOutstanding: outstanding,
-      emiAmount: emiAmount,
+      emiAmount,
       interestRate: 0,
       processingFee: 0,
-      emisRemaining: emiRemaining,
-      totalEmis: totalEmis,
-      dueDate: 1,
-      nextEMIDate: nextDate,
+      emisRemaining,
+      totalEmis,
+      dueDate: dueDay,
+      nextEMIDate,
       loanStartDate: formData.loanStartDate,
-      loanEndDate: formData.loanStartDate,
+      loanEndDate,
       accountNumber: undefined,
       notes: formData.notes || undefined,
       colorTag: formData.colorTag,
@@ -274,7 +268,8 @@ export function Loans() {
       ) : (
         <div className="space-y-3">
           {filteredLoans.map((loan) => {
-            const completion = calculateCompletionPercentage(loan);
+            const completion = getLoanCompletionPercent(loan);
+            const outstanding = getLoanOutstanding(loan);
             return (
               <motion.div
                 key={loan.id}
@@ -286,7 +281,7 @@ export function Loans() {
                   <div className="space-y-3">
                     <div className="flex items-start gap-4">
                       <ProgressRing progress={completion} size={72} className="flex-shrink-0">
-                        <span className="text-base font-bold text-white">{completion.toFixed(0)}%</span>
+                        <span className="text-base font-bold text-white">{Math.round(completion)}%</span>
                       </ProgressRing>
 
                       <div className="flex-1 min-w-0">
@@ -305,7 +300,7 @@ export function Loans() {
                         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-x-4 sm:gap-y-1 text-sm">
                           <div className="sm:flex sm:justify-between">
                             <span className="block text-slate-500 sm:inline">Outstanding</span>
-                            <span className="block font-semibold text-white sm:inline">{formatCurrency(loan.currentOutstanding)}</span>
+                            <span className="block font-semibold text-white sm:inline">{formatCurrency(outstanding)}</span>
                           </div>
                           <div className="sm:flex sm:justify-between">
                             <span className="block text-slate-500 sm:inline">Monthly EMI</span>
@@ -327,7 +322,7 @@ export function Loans() {
 
                     <div className="flex justify-between text-xs text-slate-400">
                       <span>{(loan.totalEmis - loan.emisRemaining)} / {loan.totalEmis} EMIs Paid</span>
-                      <span>{completion.toFixed(0)}%</span>
+                      <span>{Math.round(completion)}%</span>
                     </div>
                     <div className="w-full bg-slate-700 rounded-full h-2">
                       <motion.div
@@ -365,7 +360,6 @@ export function Loans() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
       <Modal isOpen={!!showDeleteConfirm} onClose={() => setShowDeleteConfirm(null)} title="Delete Loan">
         <div className="space-y-4">
           <p className="text-slate-300">Are you sure you want to delete this loan and all its EMI records? This action cannot be undone.</p>
@@ -376,7 +370,6 @@ export function Loans() {
         </div>
       </Modal>
 
-      {/* Add/Edit Modal */}
       <Modal
         isOpen={showModal}
         onClose={handleCloseModal}
@@ -482,10 +475,12 @@ export function Loans() {
           </div>
 
           <Input
-            label="Next EMI Date"
+            label="Next EMI Date *"
             type="date"
             value={formData.nextEMIDate}
             onChange={(e) => setFormData({ ...formData, nextEMIDate: e.target.value })}
+            error={formErrors.nextEMIDate}
+            required
           />
 
           <div>
@@ -523,4 +518,11 @@ export function Loans() {
       </Modal>
     </div>
   );
+}
+
+function addEMIMonths(base: Date, day: number, offset: number): Date {
+  const result = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+  const maxDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+  result.setDate(Math.min(day, maxDay));
+  return result;
 }

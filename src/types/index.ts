@@ -49,6 +49,7 @@ export interface UserSettings {
   currency: string;
   dateFormat: string;
   notificationSettings: {
+    enabled: boolean;
     reminder7Days: boolean;
     reminder3Days: boolean;
     reminder1Day: boolean;
@@ -57,6 +58,7 @@ export interface UserSettings {
   };
   darkMode: boolean;
   monthlySalary?: number;
+  averageMonthlyTradingIncome?: number;
   createdAt: string;
   updatedAt: string;
 }

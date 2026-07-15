@@ -138,7 +138,8 @@ export function calculatePaymentStreak(emis: EMI[]): number {
 export function calculateFinancialHealth(
   loans: Loan[],
   emis: EMI[],
-  monthlySalary?: number
+  monthlySalary?: number,
+  averageMonthlyTradingIncome?: number
 ): FinancialHealth {
   const totalDebt = calculateTotalOutstanding(loans);
   const totalMonthlyEMI = calculateTotalMonthlyEMI(loans);
@@ -146,8 +147,11 @@ export function calculateFinancialHealth(
   const { rate: onTimeRate, hasData: hasPaymentData } = calculateOnTimePaymentRate(emis);
   const streak = calculatePaymentStreak(emis);
 
-  const hasSalary = monthlySalary !== undefined && monthlySalary > 0;
-  const debtToIncomeRatio = hasSalary ? (totalMonthlyEMI / monthlySalary) * 100 : -1;
+  const safeSalary = (monthlySalary !== undefined && Number.isFinite(monthlySalary) && monthlySalary > 0) ? monthlySalary : 0;
+  const safeTradingIncome = (averageMonthlyTradingIncome !== undefined && Number.isFinite(averageMonthlyTradingIncome) && averageMonthlyTradingIncome > 0) ? averageMonthlyTradingIncome : 0;
+  const estimatedTotalMonthlyIncome = safeSalary + safeTradingIncome;
+  const hasAnyIncome = estimatedTotalMonthlyIncome > 0;
+  const debtToIncomeRatio = hasAnyIncome ? (totalMonthlyEMI / estimatedTotalMonthlyIncome) * 100 : -1;
 
   let score = 50;
   if (hasPaymentData) {
@@ -162,14 +166,14 @@ export function calculateFinancialHealth(
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   const riskLevel: 'Low' | 'Medium' | 'High' =
-    !hasPaymentData && !hasSalary ? 'Low' :
+    !hasPaymentData && !hasAnyIncome ? 'Low' :
     score >= 70 ? 'Low' : score >= 40 ? 'Medium' : 'High';
 
   const suggestions: string[] = [];
-  if (!hasSalary) {
+  if (!hasAnyIncome) {
     suggestions.push('Add your monthly income in Settings to calculate debt-to-income risk.');
   } else if (debtToIncomeRatio > 40) {
-    suggestions.push('Your monthly EMI is high relative to your income. Consider debt consolidation.');
+    suggestions.push('Your monthly EMI is high relative to your estimated monthly income. Consider debt consolidation.');
   }
   if (hasPaymentData && onTimeRate < 80) {
     suggestions.push('Improve your payment discipline to boost your credit score.');

@@ -2,6 +2,10 @@ import { Loan, EMI } from '../types';
 import { addEMIMonths, parseLocalDate, dateKey, toISODate } from './dateHelpers';
 
 export function getLoanOutstanding(loan: Loan): number {
+  const stored = loan.currentOutstanding;
+  if (typeof stored === 'number' && Number.isFinite(stored) && stored >= 0) {
+    return stored;
+  }
   return Math.max(0, loan.emiAmount * loan.emisRemaining);
 }
 

@@ -7,21 +7,21 @@ import { formatCurrency, formatDate, formatPercentage } from '../utils/formatter
 import { getLoanOutstanding, getLoanPaidEMIs, getLoanCompletionPercent } from '../utils/emiSchedule';
 
 export function Reports() {
-  const { loans, emis, loading } = useLoans();
+  const { loans, emis, paymentHistory, loading } = useLoans();
 
   const activeLoans = useMemo(() => loans.filter(l => l.status === 'active' || !l.status), [loans]);
 
   const stats = useMemo(() => {
     const totalOutstanding = activeLoans.reduce((s, l) => s + getLoanOutstanding(l), 0);
-    const totalPaid = activeLoans.reduce((s, l) => {
-      const loanEmis = emis.filter(e => e.loanId === l.id && e.status === 'Paid');
-      return s + loanEmis.reduce((sum, e) => sum + e.amount, 0);
-    }, 0);
+    const activeLoanIds = new Set(activeLoans.map(l => l.id));
+    const totalPaid = paymentHistory
+      .filter(record => activeLoanIds.has(record.loanId))
+      .reduce((sum, record) => sum + record.amount, 0);
     const totalAllEmis = activeLoans.reduce((s, l) => s + l.totalEmis, 0);
     const totalPaidEmis = activeLoans.reduce((s, l) => s + getLoanPaidEMIs(l), 0);
     const completionRate = totalAllEmis > 0 ? (totalPaidEmis / totalAllEmis) * 100 : 0;
     return { totalOutstanding, totalPaid, totalAllEmis, totalPaidEmis, completionRate };
-  }, [activeLoans, emis]);
+  }, [activeLoans, emis, paymentHistory]);
 
   if (loading) {
     return (

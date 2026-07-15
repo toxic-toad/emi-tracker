@@ -1,4 +1,4 @@
-import { Loan, EMI, FinancialHealth, AIInsight, DashboardSummary } from '../types';
+import { Loan, EMI, PaymentHistory, FinancialHealth, AIInsight, DashboardSummary } from '../types';
 import { getLoanOutstanding, getLoanCompletionPercent, getLastEMIDate } from './emiSchedule';
 import { parseLocalDate, toISODate, getWeekStart, getWeekEnd } from './dateHelpers';
 
@@ -18,17 +18,16 @@ export function calculateCompletionPercentage(loan: Loan): number {
   return getLoanCompletionPercent(loan);
 }
 
-export function calculatePaidThisMonth(emis: EMI[]): number {
+export function calculatePaidThisMonth(paymentHistory: PaymentHistory[]): number {
   const today = new Date();
   const currentMonth = today.getMonth();
   const currentYear = today.getFullYear();
-  return emis
-    .filter(emi => {
-      if (emi.status !== 'Paid' || !emi.paymentDate) return false;
-      const pd = parseLocalDate(emi.paymentDate);
+  return paymentHistory
+    .filter(record => {
+      const pd = parseLocalDate(record.paymentDate);
       return pd.getMonth() === currentMonth && pd.getFullYear() === currentYear;
     })
-    .reduce((sum, emi) => sum + emi.amount, 0);
+    .reduce((sum, record) => sum + record.amount, 0);
 }
 
 export function calculateDebtReduction(loans: Loan[]): number {
@@ -305,7 +304,7 @@ function generatePayoffStrategy(loans: Loan[]): AIInsight | null {
   };
 }
 
-export function generateDashboardSummary(loans: Loan[], emis: EMI[]): DashboardSummary {
+export function generateDashboardSummary(loans: Loan[], emis: EMI[], paymentHistory: PaymentHistory[]): DashboardSummary {
   const activeLoans = loans.filter(l => l.status === 'active' || !l.status);
   const nextEMI = calculateNextEMIDetails(activeLoans);
   return {
@@ -319,7 +318,7 @@ export function generateDashboardSummary(loans: Loan[], emis: EMI[]): DashboardS
     dueThisWeek: calculateDueThisWeek(emis, activeLoans),
     overdueAmount: calculateOverdueAmount(emis),
     debtFreeDate: calculateEstimatedDebtFreeDate(activeLoans)?.toISOString() || null,
-    paidThisMonth: calculatePaidThisMonth(emis),
+    paidThisMonth: calculatePaidThisMonth(paymentHistory),
     remainingEMIs: activeLoans.reduce((sum, loan) => sum + loan.emisRemaining, 0),
     averageEMI: calculateAverageEMI(activeLoans),
     debtReductionPercent: calculateDebtReduction(activeLoans)

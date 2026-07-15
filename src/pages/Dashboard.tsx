@@ -28,7 +28,7 @@ function cn(...classes: (string | boolean | undefined | null)[]) {
 const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f97316', '#6366f1'];
 
 export function Dashboard() {
-  const { loans, emis, loading } = useLoans();
+  const { loans, emis, paymentHistory, loading } = useLoans();
 
   const { monthlySalary, averageMonthlyTradingIncome } = useMemo(() => {
     try {
@@ -45,7 +45,7 @@ export function Dashboard() {
   }, []);
 
   const activeLoans = useMemo(() => loans.filter(l => l.status === 'active' || !l.status), [loans]);
-  const summary = useMemo(() => generateDashboardSummary(activeLoans, emis), [activeLoans, emis]);
+  const summary = useMemo(() => generateDashboardSummary(activeLoans, emis, paymentHistory), [activeLoans, emis, paymentHistory]);
   const insights = useMemo(() => generateAIInsights(activeLoans, emis), [activeLoans, emis]);
   const health = useMemo(() => calculateFinancialHealth(activeLoans, emis, monthlySalary, averageMonthlyTradingIncome), [activeLoans, emis, monthlySalary, averageMonthlyTradingIncome]);
   const monthlySavings = useMemo(() => calculateMonthlySavings(loans), [loans]);

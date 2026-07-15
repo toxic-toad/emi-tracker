@@ -330,7 +330,7 @@ export function Settings() {
 
   const notifEnabled = settings.notificationSettings.enabled;
   const notifStatusLabel = notifPermission === 'granted'
-    ? 'Permission granted'
+    ? 'Notifications active'
     : notifPermission === 'denied'
       ? 'Permission denied'
       : notifPermission === 'unsupported'
@@ -476,7 +476,7 @@ export function Settings() {
             )}
             {notifPermission === 'granted' && (
               <p className="text-xs text-slate-500 mt-1">
-                Notifications are only delivered when the app is open in this browser.
+                EMI reminders are checked when the app is opened or resumed.
               </p>
             )}
           </div>

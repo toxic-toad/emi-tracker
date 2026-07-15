@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
+import { useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoanProvider } from './contexts/LoanContext';
 import { Dashboard } from './pages/Dashboard';
@@ -9,6 +10,7 @@ import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
 import { Navigation } from './components/Navigation';
+import { checkAndNotify } from './utils/notificationService';
 
 function AppContent() {
   const { user, loading } = useAuth();
@@ -20,6 +22,28 @@ function AppContent() {
       </div>
     );
   }
+
+  useEffect(() => {
+    if (!user) return;
+
+    checkAndNotify();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndNotify();
+      }
+    };
+
+    const onFocus = () => checkAndNotify();
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [user]);
 
   if (!user) {
     return (
